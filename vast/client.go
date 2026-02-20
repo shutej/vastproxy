@@ -1,6 +1,7 @@
 package vast
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -49,4 +50,27 @@ func (c *Client) ListInstances(ctx context.Context) ([]Instance, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return result.Instances, nil
+}
+
+// AttachSSHKey attaches a public SSH key to an instance.
+func (c *Client) AttachSSHKey(ctx context.Context, instanceID int, publicKey string) error {
+	body, _ := json.Marshal(map[string]string{"ssh_key": publicKey})
+	url := fmt.Sprintf("%s/instances/%d/ssh/", apiBase, instanceID)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("attach ssh key returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }

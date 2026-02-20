@@ -55,7 +55,8 @@ type Instance struct {
 	TemplateHashID string           `json:"template_hash_id"`
 	ExtraEnv       json.RawMessage  `json:"extra_env"`
 	Onstart        string           `json:"onstart"`
-	DirectPortStart *int            `json:"direct_port_start"`
+	DirectPortStart  *int            `json:"direct_port_start"`
+	JupyterToken     string           `json:"jupyter_token"`
 
 	// Computed fields (not from JSON).
 	State          InstanceState    `json:"-"`

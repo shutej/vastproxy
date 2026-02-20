@@ -43,6 +43,9 @@ func (h *Handler) CreateChatCompletion(ctx context.Context, req *api.CreateChatC
 		return nil, fmt.Errorf("create backend request: %w", err)
 	}
 	backendReq.Header.Set("Content-Type", "application/json")
+	if tok := be.Token(); tok != "" {
+		backendReq.Header.Set("Authorization", "Bearer "+tok)
+	}
 
 	resp, err := be.HTTPClient().Do(backendReq)
 	if err != nil {
@@ -71,6 +74,9 @@ func (h *Handler) ListModels(ctx context.Context) (*api.ListModelsResponse, erro
 	backendReq, err := http.NewRequestWithContext(ctx, "GET", be.BaseURL()+"/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create backend request: %w", err)
+	}
+	if tok := be.Token(); tok != "" {
+		backendReq.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	resp, err := be.HTTPClient().Do(backendReq)
@@ -101,6 +107,9 @@ func (h *Handler) RetrieveModel(ctx context.Context, params api.RetrieveModelPar
 		be.BaseURL()+"/models/"+params.Model, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create backend request: %w", err)
+	}
+	if tok := be.Token(); tok != "" {
+		backendReq.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	resp, err := be.HTTPClient().Do(backendReq)

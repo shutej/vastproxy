@@ -85,7 +85,7 @@ func main() {
 
 	// Start backend manager (reads from mgrEventCh).
 	// Started before watcher so it's ready to receive events.
-	go manageBackends(ctx, watcher, mgrEventCh, balancer, gpuCh, keyPath)
+	go manageBackends(ctx, watcher, vastClient, mgrEventCh, balancer, gpuCh, keyPath)
 
 	// Start HTTP server.
 	go func() {
@@ -122,7 +122,7 @@ func main() {
 }
 
 // manageBackends bridges watcher events to backend creation/removal.
-func manageBackends(ctx context.Context, watcher *vast.Watcher, eventCh <-chan vast.InstanceEvent, bal *proxy.Balancer, gpuCh chan<- backend.GPUUpdate, keyPath string) {
+func manageBackends(ctx context.Context, watcher *vast.Watcher, vastClient *vast.Client, eventCh <-chan vast.InstanceEvent, bal *proxy.Balancer, gpuCh chan<- backend.GPUUpdate, keyPath string) {
 	backends := make(map[int]*backend.Backend)
 	cancels := make(map[int]context.CancelFunc)
 	var mu sync.Mutex
@@ -159,7 +159,7 @@ func manageBackends(ctx context.Context, watcher *vast.Watcher, eventCh <-chan v
 			case "added":
 				inst := evt.Instance
 				log.Printf("backend manager: adding instance %d (%s)", inst.ID, inst.DisplayName())
-				be := backend.NewBackend(inst, keyPath)
+				be := backend.NewBackend(inst, keyPath, vastClient)
 				beCtx, beCancel := context.WithCancel(ctx)
 
 				mu.Lock()
@@ -179,6 +179,7 @@ func manageBackends(ctx context.Context, watcher *vast.Watcher, eventCh <-chan v
 					}()
 					watcher.SetInstanceState(inst.ID, vast.StateConnecting)
 
+					be.EnsureSSH()
 					if err := be.CheckHealth(beCtx); err != nil {
 						log.Printf("backend %d: initial health check failed: %v", inst.ID, err)
 						watcher.SetInstanceState(inst.ID, vast.StateUnhealthy)

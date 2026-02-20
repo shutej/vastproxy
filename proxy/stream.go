@@ -63,6 +63,9 @@ func handleStreamingRequest(w http.ResponseWriter, r *http.Request, body []byte,
 		return
 	}
 	backendReq.Header.Set("Content-Type", "application/json")
+	if tok := be.Token(); tok != "" {
+		backendReq.Header.Set("Authorization", "Bearer "+tok)
+	}
 
 	resp, err := be.HTTPClient().Do(backendReq)
 	if err != nil {

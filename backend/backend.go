@@ -2,10 +2,14 @@ package backend
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 	"vastproxy/vast"
@@ -20,20 +24,31 @@ type Backend struct {
 	activeReqs    atomic.Int64
 	healthy       atomic.Bool
 	keyPath       string
+	vastClient    *vast.Client
 	sshFails      int       // consecutive SSH tunnel creation failures
 	sshBackoffTil time.Time // don't retry SSH until this time
+	sshKeyPushed  bool      // whether we've attempted to attach our SSH key
 }
 
 // NewBackend creates a backend for the given instance.
-func NewBackend(inst *vast.Instance, keyPath string) *Backend {
+func NewBackend(inst *vast.Instance, keyPath string, vastClient *vast.Client) *Backend {
 	return &Backend{
 		Instance: inst,
 		baseURL:  inst.BaseURL,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Minute, // Long timeout for streaming.
+			Timeout: 5 * time.Minute,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
 		},
-		keyPath: keyPath,
+		keyPath:    keyPath,
+		vastClient: vastClient,
 	}
+}
+
+// Token returns the instance's jupyter_token for Bearer auth on proxied ports.
+func (b *Backend) Token() string {
+	return b.Instance.JupyterToken
 }
 
 // BaseURL returns the URL to reach this backend's /v1 endpoint.
@@ -66,18 +81,38 @@ func (b *Backend) IsHealthy() bool {
 	return b.healthy.Load()
 }
 
-// CheckHealth verifies connectivity to the backend via direct HTTP.
+// CheckHealth verifies connectivity to the backend via HTTP.
+// Tries the current baseURL first, then falls back to the SSH tunnel if available.
 func (b *Backend) CheckHealth(ctx context.Context) error {
-	if b.baseURL == "" {
-		b.healthy.Store(false)
-		return fmt.Errorf("no base URL for instance %d", b.Instance.ID)
+	var lastErr error
+
+	// Try current baseURL.
+	if b.baseURL != "" {
+		if err := b.httpHealthCheck(ctx, b.baseURL); err == nil {
+			b.healthy.Store(true)
+			return nil
+		} else {
+			lastErr = fmt.Errorf("direct %s: %w", b.baseURL, err)
+		}
 	}
-	if err := b.httpHealthCheck(ctx, b.baseURL); err != nil {
-		b.healthy.Store(false)
-		return err
+
+	// Try via SSH tunnel (if EnsureSSH was called beforehand).
+	if b.tunnel != nil {
+		tunnelURL := fmt.Sprintf("http://%s/v1", b.tunnel.LocalAddr())
+		if err := b.httpHealthCheck(ctx, tunnelURL); err == nil {
+			b.baseURL = tunnelURL
+			b.healthy.Store(true)
+			return nil
+		} else {
+			lastErr = fmt.Errorf("tunnel %s: %w", tunnelURL, err)
+		}
 	}
-	b.healthy.Store(true)
-	return nil
+
+	b.healthy.Store(false)
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("no base URL or tunnel for instance %d", b.Instance.ID)
 }
 
 // EnsureSSH establishes an SSH connection for GPU metrics (best-effort).
@@ -99,7 +134,16 @@ func (b *Backend) EnsureSSH() bool {
 	)
 	if err != nil {
 		b.sshFails++
-		// Exponential backoff: 10s, 20s, 40s, ... capped at 5m20s.
+
+		// On auth failure, try attaching our public key via the vast.ai API.
+		errStr := err.Error()
+		if !b.sshKeyPushed && b.vastClient != nil &&
+			(strings.Contains(errStr, "unable to authenticate") ||
+				strings.Contains(errStr, "handshake failed")) {
+			b.pushSSHKey()
+		}
+
+		// Exponential backoff: 10s, 20s, 40s, ... capped at 5m.
 		wait := min(time.Duration(10<<min(b.sshFails-1, 5))*time.Second, 5*time.Minute)
 		b.sshBackoffTil = time.Now().Add(wait)
 		log.Printf("backend %d: ssh failed (%d consecutive), next retry in %v: %v",
@@ -111,6 +155,44 @@ func (b *Backend) EnsureSSH() bool {
 	return true
 }
 
+// pushSSHKey reads the public key and attaches it to the instance via the API.
+func (b *Backend) pushSSHKey() {
+	b.sshKeyPushed = true
+
+	keyPath := b.keyPath
+	if keyPath != "" && keyPath[0] == '~' {
+		if home, err := os.UserHomeDir(); err == nil {
+			keyPath = filepath.Join(home, keyPath[1:])
+		}
+	}
+
+	// Try .pub extension first, then the key path itself (in case it IS the pub key).
+	pubPath := keyPath + ".pub"
+	data, err := os.ReadFile(pubPath)
+	if err != nil {
+		data, err = os.ReadFile(keyPath)
+		if err != nil {
+			log.Printf("backend %d: cannot read ssh public key: %v", b.Instance.ID, err)
+			return
+		}
+	}
+
+	pubKey := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(pubKey, "ssh-") && !strings.HasPrefix(pubKey, "ecdsa-") {
+		log.Printf("backend %d: %s doesn't look like a public key, skipping", b.Instance.ID, pubPath)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := b.vastClient.AttachSSHKey(ctx, b.Instance.ID, pubKey); err != nil {
+		log.Printf("backend %d: attach ssh key failed: %v", b.Instance.ID, err)
+	} else {
+		log.Printf("backend %d: attached ssh public key via API", b.Instance.ID)
+	}
+}
+
 func (b *Backend) httpHealthCheck(ctx context.Context, baseURL string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -118,6 +200,9 @@ func (b *Backend) httpHealthCheck(ctx context.Context, baseURL string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/models", nil)
 	if err != nil {
 		return err
+	}
+	if b.Instance.JupyterToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.Instance.JupyterToken)
 	}
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
@@ -158,6 +243,9 @@ func (b *Backend) FetchModel(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if b.Instance.JupyterToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.Instance.JupyterToken)
+	}
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
 		return "", err
@@ -193,6 +281,9 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Best-effort SSH — needed for tunnel fallback and GPU metrics.
+			b.EnsureSSH()
+
 			if err := b.CheckHealth(ctx); err != nil {
 				log.Printf("backend %d: health check failed: %v", b.Instance.ID, err)
 
@@ -223,8 +314,8 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 				}
 			}
 
-			// Best-effort SSH for GPU metrics.
-			if b.EnsureSSH() {
+			// Fetch GPU metrics via SSH.
+			if b.tunnel != nil {
 				if metrics, err := b.FetchGPUMetrics(); err == nil {
 					select {
 					case gpuCh <- GPUUpdate{
@@ -235,7 +326,7 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 					default:
 					}
 				} else {
-					// SSH session broke — tear down so EnsureSSH retries.
+					// SSH session broke — tear down so EnsureSSH retries next tick.
 					b.tunnel.Close()
 					b.tunnel = nil
 				}

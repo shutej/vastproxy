@@ -104,6 +104,8 @@ func (w *Watcher) poll(ctx context.Context) {
 			if inst.PublicIPAddr != "" && inst.HostPort != 0 {
 				inst.BaseURL = fmt.Sprintf("http://%s:%d/v1", inst.PublicIPAddr, inst.HostPort)
 			}
+			log.Printf("vast watcher: new instance %d: publicIP=%s hostPort=%d containerPort=%d directSSH=%d baseURL=%s ssh=%s:%d",
+				inst.ID, inst.PublicIPAddr, inst.HostPort, inst.ContainerPort, inst.DirectSSHPort, inst.BaseURL, inst.SSHHost, inst.SSHPort)
 			w.instances[inst.ID] = inst
 			w.emit(InstanceEvent{Type: "added", Instance: inst})
 		} else {
