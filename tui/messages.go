@@ -21,21 +21,9 @@ type InstanceRemovedMsg struct {
 	InstanceID int
 }
 
-// InstanceHealthChangedMsg is sent when an instance's health state changes.
-type InstanceHealthChangedMsg struct {
-	InstanceID int
-	State      vast.InstanceState
-	ModelName  string
-}
-
 // GPUMetricsMsg delivers GPU metrics from a backend's health loop.
 type GPUMetricsMsg struct {
 	backend.GPUUpdate
-}
-
-// ServerStartedMsg is sent when the HTTP server starts listening.
-type ServerStartedMsg struct {
-	ListenAddr string
 }
 
 // ErrorMsg is sent when a fatal error occurs.

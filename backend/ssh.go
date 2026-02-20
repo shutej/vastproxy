@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -34,21 +35,32 @@ func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort in
 	if publicIP != "" && directSSHPort != 0 {
 		if err := conn.CreateClient(publicIP, fmt.Sprintf("%d", directSSHPort), "root", auth); err == nil {
 			connected = true
+		} else {
+			log.Printf("ssh: direct connect to %s:%d failed: %v", publicIP, directSSHPort, err)
 		}
 	}
 
 	// Fallback to indirect SSH.
 	if !connected && sshHost != "" {
 		if err := conn.CreateClient(sshHost, fmt.Sprintf("%d", sshPort), "root", auth); err != nil {
-			return nil, fmt.Errorf("ssh connect: %w", err)
+			return nil, fmt.Errorf("ssh connect to %s:%d: %w", sshHost, sshPort, err)
 		}
-	} else if !connected {
+		connected = true
+	}
+
+	if !connected {
 		return nil, fmt.Errorf("no SSH endpoints available")
+	}
+
+	// Verify the client was actually created (go-sshlib may leave it nil).
+	if conn.Client == nil {
+		return nil, fmt.Errorf("ssh client is nil after connect")
 	}
 
 	// Find a free local port.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		conn.Client.Close()
 		return nil, fmt.Errorf("find free port: %w", err)
 	}
 	localAddr := ln.Addr().String()
@@ -60,9 +72,17 @@ func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort in
 	}
 
 	// Start the local port forward in the background.
+	// Recover from panics in go-sshlib (it can nil-deref on failed connections).
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", remotePort)
 	go func() {
-		_ = conn.TCPLocalForward(localAddr, remoteAddr)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("ssh: tunnel panic (recovered): %v", r)
+			}
+		}()
+		if err := conn.TCPLocalForward(localAddr, remoteAddr); err != nil {
+			log.Printf("ssh: tunnel to %s exited: %v", remoteAddr, err)
+		}
 	}()
 
 	return tunnel, nil

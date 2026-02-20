@@ -23,6 +23,13 @@ func main() {
 	// Load .env (ignore error if missing).
 	_ = godotenv.Load()
 
+	// Log to file since bubbletea captures stderr.
+	logFile, err := os.OpenFile("vastproxy.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err == nil {
+		log.SetOutput(logFile)
+		defer logFile.Close()
+	}
+
 	apiKey := os.Getenv("VAST_API_KEY")
 	if apiKey == "" {
 		fmt.Fprintln(os.Stderr, "VAST_API_KEY not set. Set it in .env or environment.")
@@ -68,10 +75,6 @@ func main() {
 	tuiEventCh := watcher.Subscribe()
 	mgrEventCh := watcher.Subscribe()
 
-	// Create TUI model.
-	tuiModel := tui.NewModel(tuiEventCh, gpuCh)
-	p := tea.NewProgram(tuiModel, tea.WithAltScreen())
-
 	// Context for background goroutines.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -79,27 +82,34 @@ func main() {
 	// Handle OS signals.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
+
+	// Start backend manager (reads from mgrEventCh).
+	// Started before watcher so it's ready to receive events.
+	go manageBackends(ctx, watcher, mgrEventCh, balancer, gpuCh, keyPath)
+
+	// Start HTTP server.
+	go func() {
+		log.Printf("HTTP server listening on %s", listenAddr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP server error: %v", err)
+		}
+	}()
+
+	// Create TUI model. Pass a start function that kicks off the watcher
+	// once Init() runs, ensuring the TUI is ready to receive events.
+	startWatcher := func() {
+		go watcher.Start(ctx)
+	}
+	tuiModel := tui.NewModel(tuiEventCh, gpuCh, listenAddr, startWatcher)
+	p := tea.NewProgram(tuiModel, tea.WithAltScreen())
+
 	go func() {
 		<-sigCh
 		cancel()
 		p.Send(tea.Quit())
 	}()
 
-	// Start watcher.
-	go watcher.Start(ctx)
-
-	// Start backend manager.
-	go manageBackends(ctx, watcher, mgrEventCh, balancer, p, gpuCh, keyPath)
-
-	// Start HTTP server.
-	go func() {
-		p.Send(tui.ServerStartedMsg{ListenAddr: listenAddr})
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			p.Send(tui.ErrorMsg{Error: err})
-		}
-	}()
-
-	// Run TUI (blocking).
+	// Run TUI (blocking). Init() will trigger the watcher start.
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 	}
@@ -112,7 +122,7 @@ func main() {
 }
 
 // manageBackends bridges watcher events to backend creation/removal.
-func manageBackends(ctx context.Context, watcher *vast.Watcher, eventCh <-chan vast.InstanceEvent, bal *proxy.Balancer, p *tea.Program, gpuCh chan<- backend.GPUUpdate, keyPath string) {
+func manageBackends(ctx context.Context, watcher *vast.Watcher, eventCh <-chan vast.InstanceEvent, bal *proxy.Balancer, gpuCh chan<- backend.GPUUpdate, keyPath string) {
 	backends := make(map[int]*backend.Backend)
 	cancels := make(map[int]context.CancelFunc)
 	var mu sync.Mutex
@@ -148,6 +158,7 @@ func manageBackends(ctx context.Context, watcher *vast.Watcher, eventCh <-chan v
 			switch evt.Type {
 			case "added":
 				inst := evt.Instance
+				log.Printf("backend manager: adding instance %d (%s)", inst.ID, inst.DisplayName())
 				be := backend.NewBackend(inst, keyPath)
 				beCtx, beCancel := context.WithCancel(ctx)
 
@@ -160,38 +171,27 @@ func manageBackends(ctx context.Context, watcher *vast.Watcher, eventCh <-chan v
 
 				// Start health loop in background.
 				go func() {
-					// Initial health check.
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("backend %d: panic (recovered): %v", inst.ID, r)
+							watcher.SetInstanceState(inst.ID, vast.StateUnhealthy)
+						}
+					}()
 					watcher.SetInstanceState(inst.ID, vast.StateConnecting)
-					p.Send(tui.InstanceHealthChangedMsg{
-						InstanceID: inst.ID,
-						State:      vast.StateConnecting,
-					})
 
 					if err := be.CheckHealth(beCtx); err != nil {
 						log.Printf("backend %d: initial health check failed: %v", inst.ID, err)
 						watcher.SetInstanceState(inst.ID, vast.StateUnhealthy)
-						p.Send(tui.InstanceHealthChangedMsg{
-							InstanceID: inst.ID,
-							State:      vast.StateUnhealthy,
-						})
 					} else {
+						log.Printf("backend %d: healthy", inst.ID)
 						watcher.SetInstanceState(inst.ID, vast.StateHealthy)
-						p.Send(tui.InstanceHealthChangedMsg{
-							InstanceID: inst.ID,
-							State:      vast.StateHealthy,
-							ModelName:  inst.ModelName,
-						})
 					}
 
 					// Discover model name.
 					if inst.ModelName == "" {
 						if name, err := be.FetchModel(beCtx); err == nil {
+							log.Printf("backend %d: model=%s", inst.ID, name)
 							inst.ModelName = name
-							p.Send(tui.InstanceHealthChangedMsg{
-								InstanceID: inst.ID,
-								State:      inst.State,
-								ModelName:  name,
-							})
 						}
 					}
 
@@ -201,6 +201,7 @@ func manageBackends(ctx context.Context, watcher *vast.Watcher, eventCh <-chan v
 
 			case "removed":
 				id := evt.Instance.ID
+				log.Printf("backend manager: removing instance %d", id)
 				mu.Lock()
 				if be, ok := backends[id]; ok {
 					be.Close()

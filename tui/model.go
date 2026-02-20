@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"log"
+	"slices"
 	"strings"
 	"time"
 	"vastproxy/backend"
@@ -11,27 +13,33 @@ import (
 
 // Model is the bubbletea model for the proxy TUI.
 type Model struct {
-	instances  map[int]*InstanceView
-	order      []int // instance IDs in discovery order
-	listenAddr string
-	totalBE    int
-	healthyBE  int
-	err        error
-	eventCh    <-chan vast.InstanceEvent
-	gpuCh      <-chan backend.GPUUpdate
+	instances    map[int]*InstanceView
+	order        []int // instance IDs in discovery order
+	listenAddr   string
+	err          error
+	eventCh      <-chan vast.InstanceEvent
+	gpuCh        <-chan backend.GPUUpdate
+	startWatcher func() // called once from Init to start the watcher
+	started      bool
 }
 
 // NewModel creates the TUI model.
-func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate) Model {
+func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate, listenAddr string, startWatcher func()) Model {
 	return Model{
-		instances: make(map[int]*InstanceView),
-		eventCh:   eventCh,
-		gpuCh:     gpuCh,
+		instances:    make(map[int]*InstanceView),
+		eventCh:      eventCh,
+		gpuCh:        gpuCh,
+		listenAddr:   listenAddr,
+		startWatcher: startWatcher,
 	}
 }
 
 // Init returns the initial commands.
 func (m Model) Init() tea.Cmd {
+	// Start the watcher now that the TUI is ready to receive messages.
+	if m.startWatcher != nil && !m.started {
+		m.startWatcher()
+	}
 	return tea.Batch(
 		waitForEvent(m.eventCh),
 		waitForGPU(m.gpuCh),
@@ -50,6 +58,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case InstanceAddedMsg:
+		log.Printf("tui: InstanceAddedMsg id=%d name=%s", msg.Instance.ID, msg.Instance.DisplayName())
 		iv := &InstanceView{
 			ID:         msg.Instance.ID,
 			GPUName:    msg.Instance.GPUName,
@@ -65,8 +74,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			iv.GPUTemp = *msg.Instance.GPUTemp
 		}
 		m.instances[msg.Instance.ID] = iv
-		m.order = append(m.order, msg.Instance.ID)
-		m.totalBE++
+		if !m.hasID(msg.Instance.ID) {
+			m.order = append(m.order, msg.Instance.ID)
+		}
 		return m, waitForEvent(m.eventCh)
 
 	case InstanceUpdatedMsg:
@@ -90,28 +100,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			iv.State = vast.StateRemoving
 			iv.StateSince = time.Now()
 		}
-		m.totalBE--
-		if m.totalBE < 0 {
-			m.totalBE = 0
-		}
 		return m, waitForEvent(m.eventCh)
-
-	case InstanceHealthChangedMsg:
-		if iv, ok := m.instances[msg.InstanceID]; ok {
-			iv.State = msg.State
-			iv.StateSince = time.Now()
-			if msg.ModelName != "" {
-				iv.ModelName = msg.ModelName
-			}
-		}
-		// Recount healthy.
-		m.healthyBE = 0
-		for _, iv := range m.instances {
-			if iv.State == vast.StateHealthy {
-				m.healthyBE++
-			}
-		}
-		return m, nil
 
 	case GPUMetricsMsg:
 		if iv, ok := m.instances[msg.InstanceID]; ok {
@@ -119,10 +108,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			iv.GPUTemp = msg.Temperature
 		}
 		return m, waitForGPU(m.gpuCh)
-
-	case ServerStartedMsg:
-		m.listenAddr = msg.ListenAddr
-		return m, nil
 
 	case ErrorMsg:
 		m.err = msg.Error
@@ -139,12 +124,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	var b strings.Builder
 
-	// Header.
-	addr := m.listenAddr
-	if addr == "" {
-		addr = "(starting...)"
+	// Count healthy/total from our instance views.
+	total := len(m.instances)
+	healthy := 0
+	for _, iv := range m.instances {
+		if iv.State == vast.StateHealthy {
+			healthy++
+		}
 	}
-	b.WriteString(RenderHeader(addr, m.totalBE, m.healthyBE))
+
+	// Header.
+	b.WriteString(RenderHeader(m.listenAddr, total, healthy))
 	b.WriteString("\n\n")
 
 	// Instances in discovery order.
@@ -170,6 +160,10 @@ func (m Model) View() string {
 	return b.String()
 }
 
+func (m *Model) hasID(id int) bool {
+	return slices.Contains(m.order, id)
+}
+
 // waitForEvent returns a command that waits for the next watcher event.
 func waitForEvent(ch <-chan vast.InstanceEvent) tea.Cmd {
 	return func() tea.Msg {
@@ -177,6 +171,7 @@ func waitForEvent(ch <-chan vast.InstanceEvent) tea.Cmd {
 		if !ok {
 			return nil
 		}
+		log.Printf("tui: received event type=%s instance=%d", evt.Type, evt.Instance.ID)
 		switch evt.Type {
 		case "added":
 			return InstanceAddedMsg{Instance: evt.Instance}

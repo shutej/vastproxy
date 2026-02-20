@@ -78,6 +78,8 @@ func (w *Watcher) poll(ctx context.Context) {
 		return
 	}
 
+	log.Printf("vast watcher: poll returned %d instances", len(instances))
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -86,6 +88,7 @@ func (w *Watcher) poll(ctx context.Context) {
 	for i := range instances {
 		inst := &instances[i]
 		if inst.ActualStatus != "running" {
+			log.Printf("vast watcher: instance %d status=%q (skipping)", inst.ID, inst.ActualStatus)
 			continue
 		}
 		seen[inst.ID] = true
