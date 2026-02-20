@@ -64,8 +64,12 @@ func main() {
 	// Channels for TUI communication.
 	gpuCh := make(chan backend.GPUUpdate, 64)
 
+	// Subscribe to watcher events — separate channels for TUI and backend manager.
+	tuiEventCh := watcher.Subscribe()
+	mgrEventCh := watcher.Subscribe()
+
 	// Create TUI model.
-	tuiModel := tui.NewModel(watcher.Events(), gpuCh)
+	tuiModel := tui.NewModel(tuiEventCh, gpuCh)
 	p := tea.NewProgram(tuiModel, tea.WithAltScreen())
 
 	// Context for background goroutines.
@@ -85,7 +89,7 @@ func main() {
 	go watcher.Start(ctx)
 
 	// Start backend manager.
-	go manageBackends(ctx, watcher, balancer, p, gpuCh, keyPath)
+	go manageBackends(ctx, watcher, mgrEventCh, balancer, p, gpuCh, keyPath)
 
 	// Start HTTP server.
 	go func() {
@@ -108,7 +112,7 @@ func main() {
 }
 
 // manageBackends bridges watcher events to backend creation/removal.
-func manageBackends(ctx context.Context, watcher *vast.Watcher, bal *proxy.Balancer, p *tea.Program, gpuCh chan<- backend.GPUUpdate, keyPath string) {
+func manageBackends(ctx context.Context, watcher *vast.Watcher, eventCh <-chan vast.InstanceEvent, bal *proxy.Balancer, p *tea.Program, gpuCh chan<- backend.GPUUpdate, keyPath string) {
 	backends := make(map[int]*backend.Backend)
 	cancels := make(map[int]context.CancelFunc)
 	var mu sync.Mutex
@@ -136,7 +140,7 @@ func manageBackends(ctx context.Context, watcher *vast.Watcher, bal *proxy.Balan
 			mu.Unlock()
 			return
 
-		case evt, ok := <-watcher.Events():
+		case evt, ok := <-eventCh:
 			if !ok {
 				return
 			}

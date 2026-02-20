@@ -13,7 +13,7 @@ type Watcher struct {
 	client       *Client
 	pollInterval time.Duration
 	instances    map[int]*Instance
-	eventCh      chan InstanceEvent
+	subscribers  []chan InstanceEvent
 	mu           sync.RWMutex
 }
 
@@ -23,13 +23,15 @@ func NewWatcher(client *Client, pollInterval time.Duration) *Watcher {
 		client:       client,
 		pollInterval: pollInterval,
 		instances:    make(map[int]*Instance),
-		eventCh:      make(chan InstanceEvent, 64),
 	}
 }
 
-// Events returns the channel that receives instance lifecycle events.
-func (w *Watcher) Events() <-chan InstanceEvent {
-	return w.eventCh
+// Subscribe returns a new channel that receives a copy of every instance event.
+// Each subscriber gets its own independent channel. Call before Start.
+func (w *Watcher) Subscribe() <-chan InstanceEvent {
+	ch := make(chan InstanceEvent, 64)
+	w.subscribers = append(w.subscribers, ch)
+	return ch
 }
 
 // Instances returns a snapshot of all tracked instances.
@@ -121,10 +123,12 @@ func (w *Watcher) poll(ctx context.Context) {
 }
 
 func (w *Watcher) emit(evt InstanceEvent) {
-	select {
-	case w.eventCh <- evt:
-	default:
-		// Drop if channel full; TUI will catch up.
+	for _, ch := range w.subscribers {
+		select {
+		case ch <- evt:
+		default:
+			// Drop if channel full; subscriber will catch up.
+		}
 	}
 }
 
