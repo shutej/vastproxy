@@ -18,7 +18,8 @@ import (
 // Backend represents a single SGLang backend instance.
 type Backend struct {
 	Instance      *vast.Instance
-	baseURL       string
+	directURL     string // original direct HTTP URL, never overwritten
+	baseURL       string // URL currently used for proxying (direct or tunnel)
 	httpClient    *http.Client
 	tunnel        *SSHTunnel
 	activeReqs    atomic.Int64
@@ -33,8 +34,9 @@ type Backend struct {
 // NewBackend creates a backend for the given instance.
 func NewBackend(inst *vast.Instance, keyPath string, vastClient *vast.Client) *Backend {
 	return &Backend{
-		Instance: inst,
-		baseURL:  inst.BaseURL,
+		Instance:  inst,
+		directURL: inst.BaseURL,
+		baseURL:   inst.BaseURL,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 			Transport: &http.Transport{
@@ -82,17 +84,19 @@ func (b *Backend) IsHealthy() bool {
 }
 
 // CheckHealth verifies connectivity to the backend via HTTP.
-// Tries the current baseURL first, then falls back to the SSH tunnel if available.
+// Tries direct URL first, then falls back to the SSH tunnel if available.
 func (b *Backend) CheckHealth(ctx context.Context) error {
 	var lastErr error
 
-	// Try current baseURL.
-	if b.baseURL != "" {
-		if err := b.httpHealthCheck(ctx, b.baseURL); err == nil {
+	// Always try the direct URL first (never lose it to a tunnel overwrite).
+	if b.directURL != "" {
+		if err := b.httpHealthCheck(ctx, b.directURL); err == nil {
+			b.baseURL = b.directURL
 			b.healthy.Store(true)
+			log.Printf("backend %d: health OK via direct %s", b.Instance.ID, b.directURL)
 			return nil
 		} else {
-			lastErr = fmt.Errorf("direct %s: %w", b.baseURL, err)
+			lastErr = fmt.Errorf("direct %s: %w", b.directURL, err)
 		}
 	}
 
@@ -102,6 +106,7 @@ func (b *Backend) CheckHealth(ctx context.Context) error {
 		if err := b.httpHealthCheck(ctx, tunnelURL); err == nil {
 			b.baseURL = tunnelURL
 			b.healthy.Store(true)
+			log.Printf("backend %d: health OK via tunnel %s", b.Instance.ID, tunnelURL)
 			return nil
 		} else {
 			lastErr = fmt.Errorf("tunnel %s: %w", tunnelURL, err)
@@ -285,7 +290,7 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 			b.EnsureSSH()
 
 			if err := b.CheckHealth(ctx); err != nil {
-				log.Printf("backend %d: health check failed: %v", b.Instance.ID, err)
+				log.Printf("backend %d: health check failed (wasHealthy=%v): %v", b.Instance.ID, wasHealthy, err)
 
 				if wasHealthy {
 					watcher.SetInstanceState(b.Instance.ID, vast.StateUnhealthy)
