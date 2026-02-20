@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -44,7 +45,8 @@ func (c *Client) ListInstances(ctx context.Context) ([]Instance, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("vast.ai API returned HTTP %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("vast.ai API returned HTTP %d: %s", resp.StatusCode, body)
 	}
 
 	var result InstancesResponse
@@ -72,7 +74,8 @@ func (c *Client) AttachSSHKey(ctx context.Context, instanceID int, publicKey str
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("attach ssh key returned HTTP %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("attach ssh key returned HTTP %d: %s", resp.StatusCode, body)
 	}
 	return nil
 }

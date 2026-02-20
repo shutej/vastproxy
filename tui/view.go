@@ -39,14 +39,15 @@ func RenderHeader(listenAddr string, totalBackends, healthyBackends int) string 
 
 // InstanceView holds the display state for a single instance.
 type InstanceView struct {
-	ID         int
-	GPUName    string
-	NumGPUs    int
-	State      vast.InstanceState
-	StateSince time.Time
-	ModelName  string
-	GPUUtil    float64
-	GPUTemp    float64
+	ID            int
+	GPUName       string
+	NumGPUs       int
+	State         vast.InstanceState
+	StateSince    time.Time
+	ModelName     string
+	GPUUtil       float64
+	GPUTemp       float64
+	HasSSHMetrics bool // true once we've received GPU data via SSH; prevents API overwrite
 }
 
 // RenderInstance renders a 3-line view for a single instance.

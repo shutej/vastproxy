@@ -6,7 +6,35 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync/atomic"
+	"time"
 )
+
+// statusRecorder wraps http.ResponseWriter to capture the status code and
+// count bytes written, for request logging.
+type statusRecorder struct {
+	http.ResponseWriter
+	status       int
+	bytesWritten int64
+}
+
+func (sr *statusRecorder) WriteHeader(code int) {
+	sr.status = code
+	sr.ResponseWriter.WriteHeader(code)
+}
+
+func (sr *statusRecorder) Write(b []byte) (int, error) {
+	n, err := sr.ResponseWriter.Write(b)
+	sr.bytesWritten += int64(n)
+	return n, err
+}
+
+// Flush implements http.Flusher for streaming (SSE) support.
+func (sr *statusRecorder) Flush() {
+	if f, ok := sr.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
 
 // NewReverseProxy creates an http.Handler that load-balances all incoming
 // requests across healthy backends using the balancer's round-robin selection.
@@ -16,6 +44,8 @@ import (
 // Requests without the /v1 prefix get it prepended.
 func NewReverseProxy(balancer *Balancer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
 		be, err := balancer.Pick()
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -44,6 +74,11 @@ func NewReverseProxy(balancer *Balancer) http.Handler {
 			}
 		}
 
+		// Capture the upstream status code from the backend response.
+		var upstreamStatus atomic.Int32
+
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
 		proxy := &httputil.ReverseProxy{
 			Director: func(req *http.Request) {
 				req.URL.Scheme = target.Scheme
@@ -58,6 +93,10 @@ func NewReverseProxy(balancer *Balancer) http.Handler {
 					req.Header.Set("Authorization", "Bearer "+tok)
 				}
 			},
+			ModifyResponse: func(resp *http.Response) error {
+				upstreamStatus.Store(int32(resp.StatusCode))
+				return nil
+			},
 			Transport: be.HTTPClient().Transport,
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 				log.Printf("proxy: backend %d error: %v", be.Instance.ID, err)
@@ -71,6 +110,11 @@ func NewReverseProxy(balancer *Balancer) http.Handler {
 			FlushInterval: -1,
 		}
 
-		proxy.ServeHTTP(w, r)
+		proxy.ServeHTTP(rec, r)
+
+		elapsed := time.Since(start)
+		us := upstreamStatus.Load()
+		log.Printf("proxy: %s %s → backend %d upstream=%d status=%d bytes=%d duration=%s",
+			r.Method, r.URL.Path, be.Instance.ID, us, rec.status, rec.bytesWritten, elapsed.Round(time.Millisecond))
 	})
 }

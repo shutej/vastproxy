@@ -86,11 +86,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Instance.ModelName != "" {
 				iv.ModelName = msg.Instance.ModelName
 			}
-			if msg.Instance.GPUUtil != nil {
-				iv.GPUUtil = *msg.Instance.GPUUtil
-			}
-			if msg.Instance.GPUTemp != nil {
-				iv.GPUTemp = *msg.Instance.GPUTemp
+			// Only use API-reported GPU metrics if we don't have SSH metrics yet.
+			// SSH nvidia-smi data is fresher and per-backend; the vast.ai API
+			// reports stale/aggregate values that overwrite correct readings.
+			if !iv.HasSSHMetrics {
+				if msg.Instance.GPUUtil != nil {
+					iv.GPUUtil = *msg.Instance.GPUUtil
+				}
+				if msg.Instance.GPUTemp != nil {
+					iv.GPUTemp = *msg.Instance.GPUTemp
+				}
 			}
 		}
 		return m, waitForEvent(m.eventCh)
@@ -106,6 +111,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if iv, ok := m.instances[msg.InstanceID]; ok {
 			iv.GPUUtil = msg.Utilization
 			iv.GPUTemp = msg.Temperature
+			iv.HasSSHMetrics = true
 		}
 		return m, waitForGPU(m.gpuCh)
 
