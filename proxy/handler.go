@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -54,7 +55,16 @@ func NewReverseProxy(balancer *Balancer) http.Handler {
 			return
 		}
 		be.Acquire()
-		defer be.Release()
+		balancer.Acquire()
+		defer func() {
+			be.Release()
+			if remaining := balancer.Release(); remaining == 0 {
+				// Last client disconnected — abort all in-flight inference
+				// on backends to free GPU resources.
+				log.Printf("proxy: last request finished, aborting all backend work")
+				go balancer.AbortAll(context.Background())
+			}
+		}()
 
 		target, err := url.Parse(be.BaseURL())
 		if err != nil {

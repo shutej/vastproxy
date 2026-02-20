@@ -21,20 +21,24 @@ type Model struct {
 	eventCh      <-chan vast.InstanceEvent
 	gpuCh        <-chan backend.GPUUpdate
 	startWatcher func() // called once from Init to start the watcher
+	abortFn      func() // called to abort all backend inference
 	started      bool
-	width        int // terminal width
-	height       int // terminal height
-	scroll       int // vertical scroll offset (in lines)
+	width        int  // terminal width
+	height       int  // terminal height
+	scroll       int  // vertical scroll offset (in lines)
+	confirmAbort bool // true when abort confirmation dialog is showing
+	abortStatus  string // transient status message after abort
 }
 
 // NewModel creates the TUI model.
-func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate, listenAddr string, startWatcher func()) Model {
+func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate, listenAddr string, startWatcher func(), abortFn func()) Model {
 	return Model{
 		instances:    make(map[int]*InstanceView),
 		eventCh:      eventCh,
 		gpuCh:        gpuCh,
 		listenAddr:   listenAddr,
 		startWatcher: startWatcher,
+		abortFn:      abortFn,
 	}
 }
 
@@ -62,9 +66,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// When confirmation dialog is showing, only handle y/n/esc.
+		if m.confirmAbort {
+			switch msg.String() {
+			case "y", "Y":
+				m.confirmAbort = false
+				m.abortStatus = "Aborting..."
+				if m.abortFn != nil {
+					go m.abortFn()
+				}
+				log.Printf("tui: user confirmed abort all")
+				return m, clearAbortStatusAfter(3 * time.Second)
+			case "n", "N", "esc":
+				m.confirmAbort = false
+				return m, nil
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "a":
+			m.confirmAbort = true
+			return m, nil
 		case "up", "k":
 			m.scroll--
 			m.clampScroll()
@@ -133,6 +158,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitForGPU(m.gpuCh)
 
+	case AbortClearedMsg:
+		m.abortStatus = ""
+		return m, nil
+
 	case ErrorMsg:
 		m.err = msg.Error
 		return m, nil
@@ -154,7 +183,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the TUI.
 func (m Model) View() string {
-	var b strings.Builder
+	// --- Footer (pinned to bottom) ---
+	var footer strings.Builder
+	if m.err != nil {
+		footer.WriteString("  ERROR: " + m.err.Error() + "\n")
+	}
+	if m.abortStatus != "" {
+		footer.WriteString("  " + stateRemoving.Render(m.abortStatus) + "\n")
+	}
+	if m.confirmAbort {
+		footer.WriteString("  " + stateUnhealthy.Render("Abort all backend inference? (y/n)"))
+	} else {
+		footer.WriteString("  Press a to abort all | q to quit")
+	}
+	footerStr := footer.String()
+	footerLines := strings.Count(footerStr, "\n") + 1
+
+	// --- Body (scrollable) ---
+	var body strings.Builder
 
 	// Count healthy/total from our instance views.
 	total := len(m.instances)
@@ -165,9 +211,8 @@ func (m Model) View() string {
 		}
 	}
 
-	// Header.
-	b.WriteString(RenderHeader(m.listenAddr, total, healthy))
-	b.WriteString("\n\n")
+	body.WriteString(RenderHeader(m.listenAddr, total, healthy))
+	body.WriteString("\n\n")
 
 	// Collect rendered cards.
 	var cards []string
@@ -180,20 +225,16 @@ func (m Model) View() string {
 	}
 
 	if len(cards) == 0 {
-		b.WriteString("  Watching for vast.ai instances...\n")
+		body.WriteString("  Watching for vast.ai instances...\n")
 	} else {
-		b.WriteString(m.renderGrid(cards))
+		body.WriteString(m.renderGrid(cards))
 	}
 
-	if m.err != nil {
-		b.WriteString("\n  ERROR: " + m.err.Error() + "\n")
-	}
+	// Apply scroll to body, reserving space for the footer.
+	bodyContent := body.String()
+	scrolled := m.applyScroll(bodyContent, footerLines)
 
-	b.WriteString("\n  Press q to quit\n")
-
-	// Apply scroll + scrollbar.
-	content := b.String()
-	return m.applyScroll(content)
+	return scrolled + "\n" + footerStr
 }
 
 func (m *Model) hasID(id int) bool {
@@ -246,17 +287,23 @@ func (m Model) renderGrid(cards []string) string {
 }
 
 // applyScroll slices visible lines from content and appends a scrollbar.
-func (m Model) applyScroll(content string) string {
+// reservedLines is the number of lines reserved for the fixed footer.
+func (m Model) applyScroll(content string, reservedLines int) string {
 	lines := strings.Split(content, "\n")
 	totalLines := len(lines)
 
-	viewH := m.height
+	viewH := m.height - reservedLines - 1 // -1 for the newline between body and footer
 	if viewH <= 0 {
 		return content // no window size yet, render everything
 	}
 
 	// If content fits, no scrolling needed.
 	if totalLines <= viewH {
+		// Pad to push footer to the bottom.
+		pad := viewH - totalLines
+		if pad > 0 {
+			content += strings.Repeat("\n", pad)
+		}
 		return content
 	}
 
@@ -328,5 +375,11 @@ func waitForGPU(ch <-chan backend.GPUUpdate) tea.Cmd {
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return TickMsg(t)
+	})
+}
+
+func clearAbortStatusAfter(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg {
+		return AbortClearedMsg{}
 	})
 }

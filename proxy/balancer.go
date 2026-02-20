@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sort"
@@ -11,9 +12,10 @@ import (
 
 // Balancer implements round-robin load balancing across healthy backends.
 type Balancer struct {
-	backends []*backend.Backend
-	counter  atomic.Uint64 // monotonically increasing request counter
-	mu       sync.RWMutex
+	backends    []*backend.Backend
+	counter     atomic.Uint64 // monotonically increasing request counter
+	activeReqs  atomic.Int64  // total in-flight requests across all backends
+	mu          sync.RWMutex
 }
 
 // NewBalancer creates a new load balancer.
@@ -85,4 +87,37 @@ func (b *Balancer) TotalCount() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return len(b.backends)
+}
+
+// Acquire increments the global active request counter and returns the new value.
+func (b *Balancer) Acquire() int64 {
+	return b.activeReqs.Add(1)
+}
+
+// Release decrements the global active request counter and returns the new value.
+func (b *Balancer) Release() int64 {
+	return b.activeReqs.Add(-1)
+}
+
+// ActiveRequests returns the total number of in-flight requests.
+func (b *Balancer) ActiveRequests() int64 {
+	return b.activeReqs.Load()
+}
+
+// AbortAll sends abort requests to all healthy backends.
+func (b *Balancer) AbortAll(ctx context.Context) {
+	b.mu.RLock()
+	backends := make([]*backend.Backend, len(b.backends))
+	copy(backends, b.backends)
+	b.mu.RUnlock()
+
+	for _, be := range backends {
+		if be.IsHealthy() {
+			if err := be.AbortAll(ctx); err != nil {
+				log.Printf("balancer: abort on backend %d failed: %v", be.Instance.ID, err)
+			} else {
+				log.Printf("balancer: aborted all requests on backend %d", be.Instance.ID)
+			}
+		}
+	}
 }

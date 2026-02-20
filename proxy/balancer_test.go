@@ -1,7 +1,11 @@
 package proxy
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"vastproxy/backend"
 	"vastproxy/vast"
@@ -235,5 +239,85 @@ func TestSetBackendsResetsCleanly(t *testing.T) {
 	}
 	if !ids[5] || !ids[6] {
 		t.Errorf("expected both 5 and 6, got %v", ids)
+	}
+}
+
+func TestBalancerAcquireRelease(t *testing.T) {
+	bal := NewBalancer()
+
+	if got := bal.ActiveRequests(); got != 0 {
+		t.Fatalf("initial ActiveRequests = %d, want 0", got)
+	}
+
+	bal.Acquire()
+	bal.Acquire()
+	if got := bal.ActiveRequests(); got != 2 {
+		t.Fatalf("after 2 acquires, ActiveRequests = %d, want 2", got)
+	}
+
+	remaining := bal.Release()
+	if remaining != 1 {
+		t.Fatalf("Release returned %d, want 1", remaining)
+	}
+
+	remaining = bal.Release()
+	if remaining != 0 {
+		t.Fatalf("Release returned %d, want 0", remaining)
+	}
+}
+
+func TestBalancerAbortAll(t *testing.T) {
+	var abortCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/abort_request" {
+			abortCount.Add(1)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	bal := NewBalancer()
+	b1 := &vast.Instance{ID: 1, BaseURL: srv.URL + "/v1", JupyterToken: "tok"}
+	b2 := &vast.Instance{ID: 2, BaseURL: srv.URL + "/v1", JupyterToken: "tok"}
+	be1 := backend.NewBackend(b1, "", nil)
+	be2 := backend.NewBackend(b2, "", nil)
+	be1.SetHealthy(true)
+	be2.SetHealthy(true)
+	bal.SetBackends([]*backend.Backend{be1, be2})
+
+	bal.AbortAll(context.Background())
+
+	if got := abortCount.Load(); got != 2 {
+		t.Errorf("abort called %d times, want 2", got)
+	}
+}
+
+func TestBalancerAbortAllSkipsUnhealthy(t *testing.T) {
+	var abortCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/abort_request" {
+			abortCount.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	bal := NewBalancer()
+	b1 := &vast.Instance{ID: 1, BaseURL: srv.URL + "/v1", JupyterToken: "tok"}
+	b2 := &vast.Instance{ID: 2, BaseURL: srv.URL + "/v1", JupyterToken: "tok"}
+	be1 := backend.NewBackend(b1, "", nil)
+	be2 := backend.NewBackend(b2, "", nil)
+	be1.SetHealthy(true)
+	be2.SetHealthy(false) // unhealthy — should be skipped
+	bal.SetBackends([]*backend.Backend{be1, be2})
+
+	bal.AbortAll(context.Background())
+
+	if got := abortCount.Load(); got != 1 {
+		t.Errorf("abort called %d times, want 1 (unhealthy skipped)", got)
 	}
 }

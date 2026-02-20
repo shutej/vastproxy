@@ -33,3 +33,6 @@ type ErrorMsg struct {
 
 // TickMsg is sent periodically to refresh durations in the view.
 type TickMsg time.Time
+
+// AbortClearedMsg clears the abort status message after a delay.
+type AbortClearedMsg struct{}

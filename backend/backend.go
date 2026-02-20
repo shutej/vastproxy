@@ -372,6 +372,40 @@ func (b *Backend) Close() {
 	}
 }
 
+// AbortAll sends POST /abort_request with empty rid to abort all in-flight
+// inference on this backend. SGLang stops generation for all active requests.
+func (b *Backend) AbortAll(ctx context.Context) error {
+	if b.baseURL == "" {
+		return fmt.Errorf("no base URL")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// The /abort_request endpoint is at the server root, not under /v1.
+	// Strip /v1 suffix from baseURL to get the server root.
+	serverURL := strings.TrimSuffix(b.baseURL, "/v1")
+
+	req, err := http.NewRequestWithContext(ctx, "POST", serverURL+"/abort_request",
+		strings.NewReader(`{"rid":""}`))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if b.Instance.JupyterToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.Instance.JupyterToken)
+	}
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("abort returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // GPUUpdate is sent from a backend's health loop to the TUI.
 type GPUUpdate struct {
 	InstanceID  int

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -687,6 +688,59 @@ func TestCheckHealthTunnelOnly(t *testing.T) {
 	}
 	if !be.IsHealthy() {
 		t.Error("expected healthy via tunnel only")
+	}
+}
+
+func TestAbortAll(t *testing.T) {
+	var gotPath, gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	inst := testInstance(1, srv.URL+"/v1")
+	be := NewBackend(inst, "", nil)
+
+	if err := be.AbortAll(context.Background()); err != nil {
+		t.Fatalf("AbortAll() error: %v", err)
+	}
+	if gotPath != "/abort_request" {
+		t.Errorf("path = %q, want /abort_request", gotPath)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Errorf("auth = %q, want Bearer test-token", gotAuth)
+	}
+	if gotBody != `{"rid":""}` {
+		t.Errorf("body = %q, want {\"rid\":\"\"}", gotBody)
+	}
+}
+
+func TestAbortAllHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	inst := testInstance(1, srv.URL+"/v1")
+	be := NewBackend(inst, "", nil)
+
+	err := be.AbortAll(context.Background())
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+}
+
+func TestAbortAllNoBaseURL(t *testing.T) {
+	inst := testInstance(1, "")
+	be := NewBackend(inst, "", nil)
+
+	err := be.AbortAll(context.Background())
+	if err == nil {
+		t.Fatal("expected error for empty base URL")
 	}
 }
 

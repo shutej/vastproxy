@@ -93,7 +93,10 @@ func main() {
 	startWatcher := func() {
 		go watcher.Start(ctx)
 	}
-	tuiModel := tui.NewModel(tuiEventCh, gpuCh, listenAddr, startWatcher)
+	abortFn := func() {
+		balancer.AbortAll(context.Background())
+	}
+	tuiModel := tui.NewModel(tuiEventCh, gpuCh, listenAddr, startWatcher, abortFn)
 	p := tea.NewProgram(tuiModel, tea.WithAltScreen())
 
 	go func() {
