@@ -3,10 +3,12 @@ package backend
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 
 	sshlib "github.com/blacknon/go-sshlib"
 	"golang.org/x/crypto/ssh"
@@ -25,6 +27,7 @@ type TunnelFactory func(publicIP string, directSSHPort int, sshHost string, sshP
 // SSHTunnel manages an SSH connection and local port forward.
 type SSHTunnel struct {
 	conn      *sshlib.Connect
+	listener  net.Listener
 	localAddr string // "127.0.0.1:<port>" — assigned after Start
 }
 
@@ -85,20 +88,51 @@ func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort in
 	}
 
 	// Start the local port forward in the background.
-	// Recover from panics in go-sshlib (it can nil-deref on failed connections).
+	// We use our own forwarder instead of go-sshlib's TCPLocalForward
+	// because the library ignores Dial errors and passes nil to io.Copy,
+	// causing unrecoverable panics in child goroutines.
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", remotePort)
+	ln2, err := net.Listen("tcp", localAddr)
+	if err != nil {
+		conn.Client.Close()
+		return nil, fmt.Errorf("listen %s: %w", localAddr, err)
+	}
+	tunnel.listener = ln2
+
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("ssh: tunnel panic (recovered): %v", r)
+		for {
+			local, err := ln2.Accept()
+			if err != nil {
+				return // listener closed
 			}
-		}()
-		if err := conn.TCPLocalForward(localAddr, remoteAddr); err != nil {
-			log.Printf("ssh: tunnel to %s exited: %v", remoteAddr, err)
+			remote, err := conn.Client.Dial("tcp", remoteAddr)
+			if err != nil {
+				log.Printf("ssh: dial remote %s: %v", remoteAddr, err)
+				local.Close()
+				continue
+			}
+			go forward(local, remote)
 		}
 	}()
 
 	return tunnel, nil
+}
+
+// forward copies data between two connections and closes both when done.
+func forward(a, b net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		io.Copy(b, a)
+		wg.Done()
+	}()
+	go func() {
+		io.Copy(a, b)
+		wg.Done()
+	}()
+	wg.Wait()
+	a.Close()
+	b.Close()
 }
 
 // LocalAddr returns the local address of the tunnel (e.g., "127.0.0.1:54321").
@@ -126,8 +160,11 @@ func (t *SSHTunnel) RunCommand(command string) (string, error) {
 	return stdout.String(), nil
 }
 
-// Close tears down the SSH connection.
+// Close tears down the SSH connection and stops the local listener.
 func (t *SSHTunnel) Close() {
+	if t.listener != nil {
+		t.listener.Close()
+	}
 	if t.conn != nil && t.conn.Client != nil {
 		t.conn.Client.Close()
 	}
