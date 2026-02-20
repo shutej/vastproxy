@@ -1,130 +1,76 @@
 package proxy
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
+	"log"
 	"net/http"
-	"vastproxy/api"
+	"net/http/httputil"
+	"net/url"
+	"strings"
 )
 
-// Handler implements the ogen-generated api.Handler interface.
-type Handler struct {
-	api.UnimplementedHandler
-	balancer *Balancer
-}
+// NewReverseProxy creates an http.Handler that load-balances all incoming
+// requests across healthy backends using the balancer's round-robin selection.
+//
+// Incoming path is forwarded as-is to the backend's /v1 endpoint. For example,
+// a request to /v1/chat/completions is proxied to <backend>/v1/chat/completions.
+// Requests without the /v1 prefix get it prepended.
+func NewReverseProxy(balancer *Balancer) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		be, err := balancer.Pick()
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"error":{"message":"no backends available","type":"server_error"}}`))
+			return
+		}
+		be.Acquire()
+		defer be.Release()
 
-// NewHandler creates a new proxy handler.
-func NewHandler(balancer *Balancer) *Handler {
-	return &Handler{
-		balancer: balancer,
-	}
-}
+		target, err := url.Parse(be.BaseURL())
+		if err != nil {
+			log.Printf("proxy: bad backend URL %q: %v", be.BaseURL(), err)
+			http.Error(w, `{"error":{"message":"internal error"}}`, http.StatusInternalServerError)
+			return
+		}
 
-// CreateChatCompletion proxies a non-streaming chat completion to a backend.
-func (h *Handler) CreateChatCompletion(ctx context.Context, req *api.CreateChatCompletionRequest) (*api.CreateChatCompletionResponse, error) {
-	be, err := h.balancer.Pick()
-	if err != nil {
-		return nil, err
-	}
-	be.Acquire()
-	defer be.Release()
+		// The backend's BaseURL already ends with /v1.
+		// If the incoming path starts with /v1/, strip it so we don't double up.
+		inPath := r.URL.Path
+		if after, ok := strings.CutPrefix(inPath, "/v1"); ok {
+			if after == "" {
+				inPath = "/"
+			} else {
+				inPath = after // already starts with /
+			}
+		}
 
-	// Marshal the request and forward via raw HTTP to the backend.
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
+		proxy := &httputil.ReverseProxy{
+			Director: func(req *http.Request) {
+				req.URL.Scheme = target.Scheme
+				req.URL.Host = target.Host
+				req.URL.Path = target.Path + inPath // target.Path = /v1, inPath = /chat/completions
+				req.URL.RawQuery = r.URL.RawQuery
+				req.Host = target.Host
 
-	backendReq, err := http.NewRequestWithContext(ctx, "POST",
-		be.BaseURL()+"/chat/completions",
-		jsonReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create backend request: %w", err)
-	}
-	backendReq.Header.Set("Content-Type", "application/json")
-	if tok := be.Token(); tok != "" {
-		backendReq.Header.Set("Authorization", "Bearer "+tok)
-	}
+				// Replace any client auth with the backend's bearer token.
+				req.Header.Del("Authorization")
+				if tok := be.Token(); tok != "" {
+					req.Header.Set("Authorization", "Bearer "+tok)
+				}
+			},
+			Transport: be.HTTPClient().Transport,
+			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+				log.Printf("proxy: backend %d error: %v", be.Instance.ID, err)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadGateway)
+				w.Write([]byte(`{"error":{"message":"backend error","type":"server_error"}}`))
+			},
+			// Streaming (SSE) works automatically — ReverseProxy flushes
+			// the response when the backend sends data, because Go's
+			// default FlushInterval is -1 for responses without Content-Length.
+			FlushInterval: -1,
+		}
 
-	resp, err := be.HTTPClient().Do(backendReq)
-	if err != nil {
-		return nil, fmt.Errorf("backend request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("backend returned %d", resp.StatusCode)
-	}
-
-	var result api.CreateChatCompletionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode backend response: %w", err)
-	}
-	return &result, nil
-}
-
-// ListModels proxies a list models request to a backend.
-func (h *Handler) ListModels(ctx context.Context) (*api.ListModelsResponse, error) {
-	be, err := h.balancer.Pick()
-	if err != nil {
-		return nil, err
-	}
-
-	backendReq, err := http.NewRequestWithContext(ctx, "GET", be.BaseURL()+"/models", nil)
-	if err != nil {
-		return nil, fmt.Errorf("create backend request: %w", err)
-	}
-	if tok := be.Token(); tok != "" {
-		backendReq.Header.Set("Authorization", "Bearer "+tok)
-	}
-
-	resp, err := be.HTTPClient().Do(backendReq)
-	if err != nil {
-		return nil, fmt.Errorf("backend request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("backend returned %d", resp.StatusCode)
-	}
-
-	var result api.ListModelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode backend response: %w", err)
-	}
-	return &result, nil
-}
-
-// RetrieveModel proxies a retrieve model request to a backend.
-func (h *Handler) RetrieveModel(ctx context.Context, params api.RetrieveModelParams) (*api.Model, error) {
-	be, err := h.balancer.Pick()
-	if err != nil {
-		return nil, err
-	}
-
-	backendReq, err := http.NewRequestWithContext(ctx, "GET",
-		be.BaseURL()+"/models/"+params.Model, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create backend request: %w", err)
-	}
-	if tok := be.Token(); tok != "" {
-		backendReq.Header.Set("Authorization", "Bearer "+tok)
-	}
-
-	resp, err := be.HTTPClient().Do(backendReq)
-	if err != nil {
-		return nil, fmt.Errorf("backend request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("backend returned %d", resp.StatusCode)
-	}
-
-	var result api.Model
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode backend response: %w", err)
-	}
-	return &result, nil
+		proxy.ServeHTTP(w, r)
+	})
 }

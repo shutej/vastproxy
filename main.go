@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"sync"
 	"time"
-	"vastproxy/api"
 	"vastproxy/backend"
 	"vastproxy/proxy"
 	"vastproxy/tui"
@@ -53,14 +52,8 @@ func main() {
 	// Create load balancer.
 	balancer := proxy.NewBalancer()
 
-	// Create ogen handler + streaming middleware.
-	handler := proxy.NewHandler(balancer)
-	ogenServer, err := api.NewServer(handler)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create API server: %v\n", err)
-		os.Exit(1)
-	}
-	httpHandler := proxy.StreamingMiddleware(ogenServer, balancer)
+	// Create reverse proxy handler.
+	httpHandler := proxy.NewReverseProxy(balancer)
 
 	// Create HTTP server.
 	httpServer := &http.Server{
