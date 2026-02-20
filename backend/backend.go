@@ -21,7 +21,8 @@ type Backend struct {
 	directURL     string // original direct HTTP URL, never overwritten
 	baseURL       string // URL currently used for proxying (direct or tunnel)
 	httpClient    *http.Client
-	tunnel        *SSHTunnel
+	tunnel        Tunnel
+	tunnelFactory TunnelFactory // creates tunnels; nil = use NewSSHTunnel
 	activeReqs    atomic.Int64
 	healthy       atomic.Bool
 	keyPath       string
@@ -83,6 +84,21 @@ func (b *Backend) IsHealthy() bool {
 	return b.healthy.Load()
 }
 
+// SetHealthy sets the healthy state directly (used in tests).
+func (b *Backend) SetHealthy(v bool) {
+	b.healthy.Store(v)
+}
+
+// SetTunnel injects a tunnel (used in tests with mock tunnels).
+func (b *Backend) SetTunnel(t Tunnel) {
+	b.tunnel = t
+}
+
+// SetTunnelFactory injects a tunnel factory (used in tests).
+func (b *Backend) SetTunnelFactory(f TunnelFactory) {
+	b.tunnelFactory = f
+}
+
 // CheckHealth verifies connectivity to the backend via HTTP.
 // Tries direct URL first, then falls back to the SSH tunnel if available.
 func (b *Backend) CheckHealth(ctx context.Context) error {
@@ -129,7 +145,11 @@ func (b *Backend) EnsureSSH() bool {
 	if time.Now().Before(b.sshBackoffTil) {
 		return false
 	}
-	tunnel, err := NewSSHTunnel(
+	factory := b.tunnelFactory
+	if factory == nil {
+		factory = NewSSHTunnel
+	}
+	tunnel, err := factory(
 		b.Instance.PublicIPAddr,
 		b.Instance.DirectSSHPort,
 		b.Instance.SSHHost,

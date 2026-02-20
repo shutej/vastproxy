@@ -12,16 +12,29 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// Tunnel abstracts SSH tunnel operations so backends can be tested with mocks.
+type Tunnel interface {
+	LocalAddr() string
+	RunCommand(command string) (string, error)
+	Close()
+}
+
+// TunnelFactory creates a Tunnel. The default uses real SSH via NewSSHTunnel.
+type TunnelFactory func(publicIP string, directSSHPort int, sshHost string, sshPort int, keyPath string, remotePort int) (Tunnel, error)
+
 // SSHTunnel manages an SSH connection and local port forward.
 type SSHTunnel struct {
 	conn      *sshlib.Connect
 	localAddr string // "127.0.0.1:<port>" — assigned after Start
 }
 
+// Verify SSHTunnel implements Tunnel at compile time.
+var _ Tunnel = (*SSHTunnel)(nil)
+
 // NewSSHTunnel creates an SSH connection and establishes a local port forward.
 // It tries direct SSH first (publicIP:directPort), then falls back to
 // indirect SSH (sshHost:sshPort).
-func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort int, keyPath string, remotePort int) (*SSHTunnel, error) {
+func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort int, keyPath string, remotePort int) (Tunnel, error) {
 	conn := &sshlib.Connect{}
 	conn.HostKeyCallback = ssh.InsecureIgnoreHostKey()
 

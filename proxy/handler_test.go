@@ -1,0 +1,425 @@
+package proxy
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"vastproxy/backend"
+	"vastproxy/vast"
+)
+
+// fakeBackendServer creates an httptest.Server that echoes request info back.
+func fakeBackendServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Echo back path + auth for test verification.
+		auth := r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"path":%q,"auth":%q}`, r.URL.Path, auth)
+	}))
+}
+
+func sseBackendServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for i := range 3 {
+			fmt.Fprintf(w, "data: chunk %d\n\n", i)
+			flusher.Flush()
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+}
+
+func TestReverseProxyRouting(t *testing.T) {
+	backendSrv := fakeBackendServer(t)
+	defer backendSrv.Close()
+
+	inst := &vast.Instance{ID: 1, BaseURL: backendSrv.URL + "/v1", JupyterToken: "secret"}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+
+	handler := NewReverseProxy(bal)
+
+	tests := []struct {
+		name     string
+		path     string
+		wantPath string
+	}{
+		{"with /v1 prefix", "/v1/chat/completions", "/v1/chat/completions"},
+		{"with /v1 prefix models", "/v1/models", "/v1/models"},
+		{"without prefix", "/chat/completions", "/v1/chat/completions"},
+		{"bare /v1", "/v1", "/v1/"},
+		{"models with query", "/v1/models?foo=bar", "/v1/models"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.path, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+
+			body := rec.Body.String()
+			if !strings.Contains(body, tt.wantPath) {
+				t.Errorf("body = %s, want path %q", body, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestReverseProxyBearerAuth(t *testing.T) {
+	backendSrv := fakeBackendServer(t)
+	defer backendSrv.Close()
+
+	inst := &vast.Instance{ID: 1, BaseURL: backendSrv.URL + "/v1", JupyterToken: "my-token"}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+	handler := NewReverseProxy(bal)
+
+	// Client sends its own auth — should be replaced with backend token.
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer client-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Bearer my-token") {
+		t.Errorf("expected backend token, got: %s", body)
+	}
+	if strings.Contains(body, "client-token") {
+		t.Error("client token should have been replaced")
+	}
+}
+
+func TestReverseProxyNoBackends(t *testing.T) {
+	bal := NewBalancer()
+	handler := NewReverseProxy(bal)
+
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "no backends available") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+}
+
+func TestReverseProxySSEStreaming(t *testing.T) {
+	backendSrv := sseBackendServer(t)
+	defer backendSrv.Close()
+
+	inst := &vast.Instance{ID: 1, BaseURL: backendSrv.URL + "/v1", JupyterToken: "tok"}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+	handler := NewReverseProxy(bal)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"stream":true}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "chunk 0") || !strings.Contains(body, "[DONE]") {
+		t.Errorf("SSE body missing expected chunks: %s", body)
+	}
+}
+
+func TestReverseProxyAcquireRelease(t *testing.T) {
+	backendSrv := fakeBackendServer(t)
+	defer backendSrv.Close()
+
+	inst := &vast.Instance{ID: 1, BaseURL: backendSrv.URL + "/v1"}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+	handler := NewReverseProxy(bal)
+
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// After request completes, active count should be back to 0.
+	if be.ActiveRequests() != 0 {
+		t.Errorf("active requests = %d after request completed", be.ActiveRequests())
+	}
+}
+
+func TestReverseProxyRoundRobinDistribution(t *testing.T) {
+	// Create 3 backend HTTP servers, each echoing a unique instance ID via a
+	// custom header and JSON body so we can verify exactly which backend was hit.
+	type backendHit struct {
+		serverURL string
+		instID    int
+	}
+	servers := make([]*httptest.Server, 3)
+	for i := range 3 {
+		id := i + 1
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Backend-ID", fmt.Sprintf("%d", id))
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"backend":%d,"path":%q}`, id, r.URL.Path)
+		}))
+		defer servers[i].Close()
+	}
+
+	backends := make([]*backend.Backend, 3)
+	for i, srv := range servers {
+		inst := &vast.Instance{ID: i + 1, BaseURL: srv.URL + "/v1"}
+		backends[i] = backend.NewBackend(inst, "", nil)
+		backends[i].SetHealthy(true)
+	}
+
+	bal := NewBalancer()
+	bal.SetBackends(backends)
+	handler := NewReverseProxy(bal)
+
+	// Send 30 requests and track which backend handled each.
+	const totalReqs = 30
+	hitCounts := map[string]int{} // X-Backend-ID -> count
+	for range totalReqs {
+		req := httptest.NewRequest("GET", "/v1/models", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+
+		backendID := rec.Header().Get("X-Backend-ID")
+		if backendID == "" {
+			t.Fatal("missing X-Backend-ID header from backend response")
+		}
+		hitCounts[backendID]++
+	}
+
+	// All 3 backends must be hit.
+	if len(hitCounts) != 3 {
+		t.Fatalf("expected 3 distinct backends, got %d: %v", len(hitCounts), hitCounts)
+	}
+
+	// Each backend should be hit exactly totalReqs/3 times (perfect round-robin).
+	for id, count := range hitCounts {
+		if count != totalReqs/3 {
+			t.Errorf("backend %s hit %d times, want %d", id, count, totalReqs/3)
+		}
+	}
+}
+
+func TestReverseProxyRoundRobinSkipsUnhealthy(t *testing.T) {
+	// 3 servers, but only backends 1 and 3 are healthy.
+	servers := make([]*httptest.Server, 3)
+	for i := range 3 {
+		id := i + 1
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Backend-ID", fmt.Sprintf("%d", id))
+			fmt.Fprintf(w, `{"backend":%d}`, id)
+		}))
+		defer servers[i].Close()
+	}
+
+	backends := make([]*backend.Backend, 3)
+	for i, srv := range servers {
+		inst := &vast.Instance{ID: i + 1, BaseURL: srv.URL + "/v1"}
+		backends[i] = backend.NewBackend(inst, "", nil)
+	}
+	backends[0].SetHealthy(true)  // ID 1 — healthy
+	backends[1].SetHealthy(false) // ID 2 — unhealthy
+	backends[2].SetHealthy(true)  // ID 3 — healthy
+
+	bal := NewBalancer()
+	bal.SetBackends(backends)
+	handler := NewReverseProxy(bal)
+
+	hitCounts := map[string]int{}
+	for range 10 {
+		req := httptest.NewRequest("GET", "/v1/models", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		backendID := rec.Header().Get("X-Backend-ID")
+		hitCounts[backendID]++
+	}
+
+	// Only backends 1 and 3 should be hit, each 5 times.
+	if hitCounts["2"] > 0 {
+		t.Errorf("unhealthy backend 2 received %d requests", hitCounts["2"])
+	}
+	if len(hitCounts) != 2 {
+		t.Fatalf("expected 2 distinct backends, got %d: %v", len(hitCounts), hitCounts)
+	}
+	for id, count := range hitCounts {
+		if count != 5 {
+			t.Errorf("backend %s hit %d times, want 5", id, count)
+		}
+	}
+}
+
+func TestReverseProxyConcurrentRoundRobin(t *testing.T) {
+	// Verify round-robin works under concurrent load.
+	servers := make([]*httptest.Server, 3)
+	for i := range 3 {
+		id := i + 1
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Backend-ID", fmt.Sprintf("%d", id))
+			fmt.Fprintf(w, `{"backend":%d}`, id)
+		}))
+		defer servers[i].Close()
+	}
+
+	backends := make([]*backend.Backend, 3)
+	for i, srv := range servers {
+		inst := &vast.Instance{ID: i + 1, BaseURL: srv.URL + "/v1"}
+		backends[i] = backend.NewBackend(inst, "", nil)
+		backends[i].SetHealthy(true)
+	}
+
+	bal := NewBalancer()
+	bal.SetBackends(backends)
+	handler := NewReverseProxy(bal)
+
+	const numWorkers = 10
+	const reqsPerWorker = 9
+
+	type result struct {
+		backendID string
+	}
+	results := make(chan result, numWorkers*reqsPerWorker)
+
+	var wg sync.WaitGroup
+	for range numWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range reqsPerWorker {
+				req := httptest.NewRequest("GET", "/v1/models", nil)
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				results <- result{backendID: rec.Header().Get("X-Backend-ID")}
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	hitCounts := map[string]int{}
+	for r := range results {
+		hitCounts[r.backendID]++
+	}
+
+	// All 3 backends must be hit.
+	if len(hitCounts) != 3 {
+		t.Fatalf("expected 3 distinct backends, got %d: %v", len(hitCounts), hitCounts)
+	}
+
+	// With round-robin and 90 total requests across 3 backends, each should get 30.
+	totalReqs := numWorkers * reqsPerWorker
+	for id, count := range hitCounts {
+		if count != totalReqs/3 {
+			t.Errorf("backend %s hit %d times, want %d", id, count, totalReqs/3)
+		}
+	}
+}
+
+func TestReverseProxyBadBackendURL(t *testing.T) {
+	// Backend with an unparseable URL should return 500.
+	inst := &vast.Instance{ID: 1, BaseURL: "://bad-url"}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+	handler := NewReverseProxy(bal)
+
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestReverseProxyBackendError(t *testing.T) {
+	// Backend that immediately closes connection.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			return
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	inst := &vast.Instance{ID: 1, BaseURL: srv.URL + "/v1"}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+	handler := NewReverseProxy(bal)
+
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+}
+
+func TestReverseProxyForwardsRequestBody(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	inst := &vast.Instance{ID: 1, BaseURL: srv.URL + "/v1"}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+	handler := NewReverseProxy(bal)
+
+	body := `{"model":"test","messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if gotBody != body {
+		t.Errorf("backend got body %q, want %q", gotBody, body)
+	}
+}

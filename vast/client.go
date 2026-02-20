@@ -9,18 +9,20 @@ import (
 	"time"
 )
 
-const apiBase = "https://console.vast.ai/api/v0"
+const defaultAPIBase = "https://console.vast.ai/api/v0"
 
 // Client is a vast.ai API client.
 type Client struct {
 	apiKey     string
+	baseURL    string
 	httpClient *http.Client
 }
 
 // NewClient creates a new vast.ai API client.
 func NewClient(apiKey string) *Client {
 	return &Client{
-		apiKey: apiKey,
+		apiKey:  apiKey,
+		baseURL: defaultAPIBase,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -29,7 +31,7 @@ func NewClient(apiKey string) *Client {
 
 // ListInstances fetches all instances from the vast.ai API.
 func (c *Client) ListInstances(ctx context.Context) ([]Instance, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", apiBase+"/instances/", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/instances/", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -55,7 +57,7 @@ func (c *Client) ListInstances(ctx context.Context) ([]Instance, error) {
 // AttachSSHKey attaches a public SSH key to an instance.
 func (c *Client) AttachSSHKey(ctx context.Context, instanceID int, publicKey string) error {
 	body, _ := json.Marshal(map[string]string{"ssh_key": publicKey})
-	url := fmt.Sprintf("%s/instances/%d/ssh/", apiBase, instanceID)
+	url := fmt.Sprintf("%s/instances/%d/ssh/", c.baseURL, instanceID)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)

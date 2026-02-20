@@ -137,6 +137,13 @@ func (w *Watcher) emit(evt InstanceEvent) {
 	}
 }
 
+// InjectInstance adds an instance directly (used in tests).
+func (w *Watcher) InjectInstance(inst *Instance) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.instances[inst.ID] = inst
+}
+
 // SetInstanceState updates an instance's state (called from backend manager).
 func (w *Watcher) SetInstanceState(id int, state InstanceState) {
 	w.mu.Lock()
