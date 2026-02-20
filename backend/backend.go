@@ -13,13 +13,15 @@ import (
 
 // Backend represents a single SGLang backend instance.
 type Backend struct {
-	Instance   *vast.Instance
-	baseURL    string
-	httpClient *http.Client
-	tunnel     *SSHTunnel
-	activeReqs atomic.Int64
-	healthy    atomic.Bool
-	keyPath    string
+	Instance      *vast.Instance
+	baseURL       string
+	httpClient    *http.Client
+	tunnel        *SSHTunnel
+	activeReqs    atomic.Int64
+	healthy       atomic.Bool
+	keyPath       string
+	sshFails      int       // consecutive SSH tunnel creation failures
+	sshBackoffTil time.Time // don't retry SSH until this time
 }
 
 // NewBackend creates a backend for the given instance.
@@ -64,56 +66,49 @@ func (b *Backend) IsHealthy() bool {
 	return b.healthy.Load()
 }
 
-// CheckHealth verifies connectivity to the backend. It first tries direct HTTP,
-// then falls back to SSH tunnel.
+// CheckHealth verifies connectivity to the backend via direct HTTP.
 func (b *Backend) CheckHealth(ctx context.Context) error {
-	// Try direct HTTP first.
-	if b.baseURL != "" {
-		if err := b.httpHealthCheck(ctx, b.baseURL); err == nil {
-			b.healthy.Store(true)
-			return nil
-		}
+	if b.baseURL == "" {
+		b.healthy.Store(false)
+		return fmt.Errorf("no base URL for instance %d", b.Instance.ID)
 	}
+	if err := b.httpHealthCheck(ctx, b.baseURL); err != nil {
+		b.healthy.Store(false)
+		return err
+	}
+	b.healthy.Store(true)
+	return nil
+}
 
-	// Try via SSH tunnel if we have one.
+// EnsureSSH establishes an SSH connection for GPU metrics (best-effort).
+// Returns true if SSH is available.
+func (b *Backend) EnsureSSH() bool {
 	if b.tunnel != nil {
-		tunnelURL := fmt.Sprintf("http://%s/v1", b.tunnel.LocalAddr())
-		if err := b.httpHealthCheck(ctx, tunnelURL); err == nil {
-			b.baseURL = tunnelURL
-			b.healthy.Store(true)
-			return nil
-		}
+		return true
 	}
-
-	// If no tunnel, try creating one.
-	if b.tunnel == nil {
-		tunnel, err := NewSSHTunnel(
-			b.Instance.PublicIPAddr,
-			b.Instance.DirectSSHPort,
-			b.Instance.SSHHost,
-			b.Instance.SSHPort,
-			b.keyPath,
-			b.Instance.ContainerPort,
-		)
-		if err != nil {
-			b.healthy.Store(false)
-			return fmt.Errorf("ssh tunnel: %w", err)
-		}
-		b.tunnel = tunnel
-
-		// Give tunnel a moment to start.
-		time.Sleep(500 * time.Millisecond)
-
-		tunnelURL := fmt.Sprintf("http://%s/v1", tunnel.LocalAddr())
-		if err := b.httpHealthCheck(ctx, tunnelURL); err == nil {
-			b.baseURL = tunnelURL
-			b.healthy.Store(true)
-			return nil
-		}
+	if time.Now().Before(b.sshBackoffTil) {
+		return false
 	}
-
-	b.healthy.Store(false)
-	return fmt.Errorf("all health checks failed for instance %d", b.Instance.ID)
+	tunnel, err := NewSSHTunnel(
+		b.Instance.PublicIPAddr,
+		b.Instance.DirectSSHPort,
+		b.Instance.SSHHost,
+		b.Instance.SSHPort,
+		b.keyPath,
+		b.Instance.ContainerPort,
+	)
+	if err != nil {
+		b.sshFails++
+		// Exponential backoff: 10s, 20s, 40s, ... capped at 5m20s.
+		wait := min(time.Duration(10<<min(b.sshFails-1, 5))*time.Second, 5*time.Minute)
+		b.sshBackoffTil = time.Now().Add(wait)
+		log.Printf("backend %d: ssh failed (%d consecutive), next retry in %v: %v",
+			b.Instance.ID, b.sshFails, wait, err)
+		return false
+	}
+	b.sshFails = 0
+	b.tunnel = tunnel
+	return true
 }
 
 func (b *Backend) httpHealthCheck(ctx context.Context, baseURL string) error {
@@ -191,6 +186,8 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	wasHealthy := b.healthy.Load()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -199,30 +196,35 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 			if err := b.CheckHealth(ctx); err != nil {
 				log.Printf("backend %d: health check failed: %v", b.Instance.ID, err)
 
-				// Check if instance is still in vast.ai
+				if wasHealthy {
+					watcher.SetInstanceState(b.Instance.ID, vast.StateUnhealthy)
+					wasHealthy = false
+				}
+
 				if !watcher.HasInstance(b.Instance.ID) {
 					log.Printf("backend %d: removed from vast.ai", b.Instance.ID)
 					b.healthy.Store(false)
 					return
 				}
-
-				// Try reconnecting SSH if it dropped
-				if b.tunnel != nil {
-					b.tunnel.Close()
-					b.tunnel = nil
-				}
 				continue
+			}
+
+			if !wasHealthy {
+				log.Printf("backend %d: now healthy", b.Instance.ID)
+				watcher.SetInstanceState(b.Instance.ID, vast.StateHealthy)
+				wasHealthy = true
 			}
 
 			// Discover model name if not yet known.
 			if b.Instance.ModelName == "" {
 				if name, err := b.FetchModel(ctx); err == nil {
+					log.Printf("backend %d: model=%s", b.Instance.ID, name)
 					b.Instance.ModelName = name
 				}
 			}
 
-			// Fetch GPU metrics via SSH.
-			if b.tunnel != nil {
+			// Best-effort SSH for GPU metrics.
+			if b.EnsureSSH() {
 				if metrics, err := b.FetchGPUMetrics(); err == nil {
 					select {
 					case gpuCh <- GPUUpdate{
@@ -232,6 +234,10 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 					}:
 					default:
 					}
+				} else {
+					// SSH session broke — tear down so EnsureSSH retries.
+					b.tunnel.Close()
+					b.tunnel = nil
 				}
 			}
 		}
