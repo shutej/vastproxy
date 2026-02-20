@@ -160,13 +160,16 @@ func (b *Backend) EnsureSSH() bool {
 	if err != nil {
 		b.sshFails++
 
-		// On auth failure, try attaching our public key via the vast.ai API.
-		errStr := err.Error()
-		if !b.sshKeyPushed && b.vastClient != nil &&
-			(strings.Contains(errStr, "unable to authenticate") ||
-				strings.Contains(errStr, "handshake failed")) {
-			b.pushSSHKey()
-		}
+		// NOTE: SSH key push via vast.ai API is disabled — it was returning
+		// 401 and is not needed for request routing (SSH is metrics-only).
+		// To re-enable, uncomment the pushSSHKey block below.
+		//
+		// errStr := err.Error()
+		// if !b.sshKeyPushed && b.vastClient != nil &&
+		// 	(strings.Contains(errStr, "unable to authenticate") ||
+		// 		strings.Contains(errStr, "handshake failed")) {
+		// 	b.pushSSHKey()
+		// }
 
 		// Exponential backoff: 10s, 20s, 40s, ... capped at 5m.
 		wait := min(time.Duration(10<<min(b.sshFails-1, 5))*time.Second, 5*time.Minute)

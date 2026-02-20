@@ -145,6 +145,79 @@ func TestPickConcurrent(t *testing.T) {
 	}
 }
 
+func TestPickDynamicHealthTransition(t *testing.T) {
+	bal := NewBalancer()
+	b1 := makeBackend(1, true)
+	b2 := makeBackend(2, true)
+	b3 := makeBackend(3, true)
+	bal.SetBackends([]*backend.Backend{b1, b2, b3})
+
+	// All 3 healthy — should distribute across all 3.
+	ids := map[int]int{}
+	for range 6 {
+		be, _ := bal.Pick()
+		ids[be.Instance.ID]++
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 backends, got %v", ids)
+	}
+
+	// Backend 2 becomes unhealthy (e.g. health check failed).
+	b2.SetHealthy(false)
+
+	// Now only 1 and 3 should be picked — no SetBackends needed.
+	ids = map[int]int{}
+	for range 6 {
+		be, _ := bal.Pick()
+		ids[be.Instance.ID]++
+	}
+	if ids[2] > 0 {
+		t.Errorf("unhealthy backend 2 was picked %d times", ids[2])
+	}
+	if len(ids) != 2 || ids[1] != 3 || ids[3] != 3 {
+		t.Errorf("expected {1:3, 3:3}, got %v", ids)
+	}
+
+	// Backend 2 recovers.
+	b2.SetHealthy(true)
+
+	ids = map[int]int{}
+	for range 9 {
+		be, _ := bal.Pick()
+		ids[be.Instance.ID]++
+	}
+	if len(ids) != 3 {
+		t.Errorf("expected 3 backends after recovery, got %v", ids)
+	}
+	for id, c := range ids {
+		if c != 3 {
+			t.Errorf("backend %d picked %d times, want 3", id, c)
+		}
+	}
+}
+
+func TestPickAllBecomeUnhealthy(t *testing.T) {
+	bal := NewBalancer()
+	b1 := makeBackend(1, true)
+	b2 := makeBackend(2, true)
+	bal.SetBackends([]*backend.Backend{b1, b2})
+
+	// Both healthy — picks work.
+	_, err := bal.Pick()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both become unhealthy.
+	b1.SetHealthy(false)
+	b2.SetHealthy(false)
+
+	_, err = bal.Pick()
+	if err != ErrNoBackends {
+		t.Errorf("Pick() err = %v, want ErrNoBackends", err)
+	}
+}
+
 func TestSetBackendsResetsCleanly(t *testing.T) {
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{makeBackend(1, true)})

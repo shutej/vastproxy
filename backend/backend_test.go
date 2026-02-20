@@ -639,23 +639,22 @@ func TestFetchModelBadJSON(t *testing.T) {
 	}
 }
 
-func TestEnsureSSHAuthFailureTriggersKeyPush(t *testing.T) {
-	// Simulate auth failure to trigger the pushSSHKey path.
+func TestEnsureSSHAuthFailureDoesNotPushKey(t *testing.T) {
+	// SSH key push via API is disabled — verify it stays off.
 	inst := testInstance(1, "http://localhost/v1")
 	be := NewBackend(inst, "/nonexistent/key", nil)
 	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("unable to authenticate")))
 
-	// Need a vastClient for the push to be attempted.
 	be.vastClient = vast.NewClient("test")
 
 	be.EnsureSSH()
 
-	if !be.sshKeyPushed {
-		t.Error("sshKeyPushed should be true after auth failure")
+	if be.sshKeyPushed {
+		t.Error("sshKeyPushed should be false (SSH key push is disabled)")
 	}
 }
 
-func TestEnsureSSHHandshakeFailureTriggersKeyPush(t *testing.T) {
+func TestEnsureSSHHandshakeFailureDoesNotPushKey(t *testing.T) {
 	inst := testInstance(1, "http://localhost/v1")
 	be := NewBackend(inst, "/nonexistent/key", nil)
 	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("handshake failed")))
@@ -664,8 +663,8 @@ func TestEnsureSSHHandshakeFailureTriggersKeyPush(t *testing.T) {
 
 	be.EnsureSSH()
 
-	if !be.sshKeyPushed {
-		t.Error("sshKeyPushed should be true after handshake failure")
+	if be.sshKeyPushed {
+		t.Error("sshKeyPushed should be false (SSH key push is disabled)")
 	}
 }
 
