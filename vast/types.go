@@ -17,7 +17,6 @@ const (
 	StateHealthy
 	StateUnhealthy
 	StateRemoving
-	StateRemoved
 )
 
 func (s InstanceState) String() string {
@@ -32,8 +31,6 @@ func (s InstanceState) String() string {
 		return "UNHEALTHY"
 	case StateRemoving:
 		return "REMOVING"
-	case StateRemoved:
-		return "REMOVED"
 	default:
 		return "UNKNOWN"
 	}

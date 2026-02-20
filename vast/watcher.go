@@ -50,7 +50,7 @@ func (w *Watcher) HasInstance(id int) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	inst, ok := w.instances[id]
-	return ok && inst.State != StateRemoved && inst.State != StateRemoving
+	return ok && inst.State != StateRemoving
 }
 
 // Start begins polling in the foreground. Call in a goroutine.
@@ -119,7 +119,7 @@ func (w *Watcher) poll(ctx context.Context) {
 
 	// Detect removed instances.
 	for id, inst := range w.instances {
-		if !seen[id] && inst.State != StateRemoving && inst.State != StateRemoved {
+		if !seen[id] && inst.State != StateRemoving {
 			inst.State = StateRemoving
 			inst.StateChangedAt = time.Now()
 			w.emit(InstanceEvent{Type: "removed", Instance: inst})

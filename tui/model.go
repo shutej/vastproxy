@@ -120,6 +120,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case TickMsg:
+		// Purge instances that have been in REMOVING state for 30s+.
+		now := time.Now()
+		for id, iv := range m.instances {
+			if iv.State == vast.StateRemoving && now.Sub(iv.StateSince) >= 30*time.Second {
+				delete(m.instances, id)
+				m.order = slices.DeleteFunc(m.order, func(x int) bool { return x == id })
+			}
+		}
 		return m, tickCmd()
 	}
 

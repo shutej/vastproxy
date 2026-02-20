@@ -270,12 +270,12 @@ func TestSetInstanceStateNonExistent(t *testing.T) {
 	}
 }
 
-func TestHasInstanceRemoved(t *testing.T) {
+func TestHasInstanceRemoving(t *testing.T) {
 	w := NewWatcher(nil, time.Hour)
-	w.instances[1] = &Instance{ID: 1, State: StateRemoved}
+	w.instances[1] = &Instance{ID: 1, State: StateRemoving}
 
 	if w.HasInstance(1) {
-		t.Error("HasInstance(1) = true, want false for REMOVED state")
+		t.Error("HasInstance(1) = true, want false for REMOVING state")
 	}
 }
 

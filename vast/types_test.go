@@ -185,7 +185,6 @@ func TestInstanceStateString(t *testing.T) {
 		{StateHealthy, "HEALTHY"},
 		{StateUnhealthy, "UNHEALTHY"},
 		{StateRemoving, "REMOVING"},
-		{StateRemoved, "REMOVED"},
 		{InstanceState(99), "UNKNOWN"},
 	}
 	for _, tt := range tests {
