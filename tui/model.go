@@ -9,6 +9,7 @@ import (
 	"vastproxy/vast"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Model is the bubbletea model for the proxy TUI.
@@ -21,6 +22,9 @@ type Model struct {
 	gpuCh        <-chan backend.GPUUpdate
 	startWatcher func() // called once from Init to start the watcher
 	started      bool
+	width        int // terminal width
+	height       int // terminal height
+	scroll       int // vertical scroll offset (in lines)
 }
 
 // NewModel creates the TUI model.
@@ -51,10 +55,24 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.clampScroll()
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "up", "k":
+			m.scroll--
+			m.clampScroll()
+			return m, nil
+		case "down", "j":
+			m.scroll++
+			m.clampScroll()
+			return m, nil
 		}
 
 	case InstanceAddedMsg:
@@ -151,18 +169,20 @@ func (m Model) View() string {
 	b.WriteString(RenderHeader(m.listenAddr, total, healthy))
 	b.WriteString("\n\n")
 
-	// Instances in discovery order.
+	// Collect rendered cards.
+	var cards []string
 	for _, id := range m.order {
 		iv, ok := m.instances[id]
 		if !ok {
 			continue
 		}
-		b.WriteString(RenderInstance(iv))
-		b.WriteString("\n\n")
+		cards = append(cards, RenderInstance(iv))
 	}
 
-	if len(m.order) == 0 {
+	if len(cards) == 0 {
 		b.WriteString("  Watching for vast.ai instances...\n")
+	} else {
+		b.WriteString(m.renderGrid(cards))
 	}
 
 	if m.err != nil {
@@ -171,11 +191,107 @@ func (m Model) View() string {
 
 	b.WriteString("\n  Press q to quit\n")
 
-	return b.String()
+	// Apply scroll + scrollbar.
+	content := b.String()
+	return m.applyScroll(content)
 }
 
 func (m *Model) hasID(id int) bool {
 	return slices.Contains(m.order, id)
+}
+
+// renderGrid lays out cards left-to-right, wrapping when they exceed terminal width.
+func (m Model) renderGrid(cards []string) string {
+	if len(cards) == 0 {
+		return ""
+	}
+
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+
+	// Leave 1 column for the scrollbar.
+	usable := termWidth - 1
+
+	var rows []string
+	var row []string
+	rowWidth := 0
+	gap := 2 // gap between cards in a row
+
+	for _, card := range cards {
+		cardW := lipgloss.Width(card)
+		needed := cardW
+		if len(row) > 0 {
+			needed += gap
+		}
+		// Wrap to new row if this card doesn't fit (unless row is empty).
+		if len(row) > 0 && rowWidth+needed > usable {
+			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, row...))
+			row = nil
+			rowWidth = 0
+		}
+		if len(row) > 0 {
+			row = append(row, strings.Repeat(" ", gap))
+			rowWidth += gap
+		}
+		row = append(row, card)
+		rowWidth += cardW
+	}
+	if len(row) > 0 {
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, row...))
+	}
+
+	return strings.Join(rows, "\n\n")
+}
+
+// applyScroll slices visible lines from content and appends a scrollbar.
+func (m Model) applyScroll(content string) string {
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+
+	viewH := m.height
+	if viewH <= 0 {
+		return content // no window size yet, render everything
+	}
+
+	// If content fits, no scrolling needed.
+	if totalLines <= viewH {
+		return content
+	}
+
+	// Clamp scroll.
+	maxScroll := totalLines - viewH
+	offset := min(max(m.scroll, 0), maxScroll)
+
+	visible := lines[offset:]
+	if len(visible) > viewH {
+		visible = visible[:viewH]
+	}
+
+	// Build scrollbar track for the right edge.
+	thumbSize := max(1, viewH*viewH/totalLines)
+	thumbPos := offset * (viewH - thumbSize) / maxScroll
+
+	result := make([]string, len(visible))
+	for i, line := range visible {
+		ch := "│"
+		if i >= thumbPos && i < thumbPos+thumbSize {
+			ch = "┃"
+		}
+		result[i] = line + strings.Repeat(" ", max(0, m.width-1-lipgloss.Width(line))) + stateDim.Render(ch)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// clampScroll ensures scroll offset is within valid bounds.
+func (m *Model) clampScroll() {
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+	// We can't know the exact max here (content isn't rendered yet),
+	// but applyScroll will clamp it further. Just prevent negatives.
 }
 
 // waitForEvent returns a command that waits for the next watcher event.
