@@ -7,7 +7,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 	"vastproxy/backend"
@@ -47,9 +46,8 @@ func (sr *statusRecorder) Flush() {
 // NewReverseProxy creates an http.Handler that load-balances all incoming
 // requests across healthy backends using the balancer's round-robin selection.
 //
-// Incoming path is forwarded as-is to the backend's /v1 endpoint. For example,
+// Incoming path is forwarded as-is to the backend. For example,
 // a request to /v1/chat/completions is proxied to <backend>/v1/chat/completions.
-// Requests without the /v1 prefix get it prepended.
 func NewReverseProxy(balancer *Balancer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -94,17 +92,6 @@ func NewReverseProxy(balancer *Balancer) http.Handler {
 			return
 		}
 
-		// The backend's BaseURL already ends with /v1.
-		// If the incoming path starts with /v1/, strip it so we don't double up.
-		inPath := r.URL.Path
-		if after, ok := strings.CutPrefix(inPath, "/v1"); ok {
-			if after == "" {
-				inPath = "/"
-			} else {
-				inPath = after // already starts with /
-			}
-		}
-
 		// Capture the upstream status code from the backend response.
 		var upstreamStatus atomic.Int32
 
@@ -114,7 +101,7 @@ func NewReverseProxy(balancer *Balancer) http.Handler {
 			Director: func(req *http.Request) {
 				req.URL.Scheme = target.Scheme
 				req.URL.Host = target.Host
-				req.URL.Path = target.Path + inPath // target.Path = /v1, inPath = /chat/completions
+				req.URL.Path = r.URL.Path
 				req.URL.RawQuery = r.URL.RawQuery
 				req.Host = target.Host
 

@@ -14,7 +14,7 @@ import (
 func makeBackend(id int, healthy bool) *backend.Backend {
 	inst := &vast.Instance{ID: id, JupyterToken: "tok"}
 	be := backend.NewBackend(inst, "", nil)
-	be.SetBaseURL("http://localhost/v1")
+	be.SetBaseURL("http://localhost")
 	if healthy {
 		be.SetHealthy(true)
 	}
@@ -285,8 +285,8 @@ func TestBalancerAbortAll(t *testing.T) {
 	b2 := &vast.Instance{ID: 2, JupyterToken: "tok"}
 	be1 := backend.NewBackend(b1, "", nil)
 	be2 := backend.NewBackend(b2, "", nil)
-	be1.SetBaseURL(srv.URL + "/v1")
-	be2.SetBaseURL(srv.URL + "/v1")
+	be1.SetBaseURL(srv.URL)
+	be2.SetBaseURL(srv.URL)
 	be1.SetHealthy(true)
 	be2.SetHealthy(true)
 	bal.SetBackends([]*backend.Backend{be1, be2})
@@ -358,8 +358,8 @@ func TestBalancerAbortAllSkipsUnhealthy(t *testing.T) {
 	b2 := &vast.Instance{ID: 2, JupyterToken: "tok"}
 	be1 := backend.NewBackend(b1, "", nil)
 	be2 := backend.NewBackend(b2, "", nil)
-	be1.SetBaseURL(srv.URL + "/v1")
-	be2.SetBaseURL(srv.URL + "/v1")
+	be1.SetBaseURL(srv.URL)
+	be2.SetBaseURL(srv.URL)
 	be1.SetHealthy(true)
 	be2.SetHealthy(false) // unhealthy — should be skipped
 	bal.SetBackends([]*backend.Backend{be1, be2})

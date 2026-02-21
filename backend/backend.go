@@ -18,7 +18,7 @@ import (
 // All HTTP traffic is routed through an SSH tunnel — no direct HTTP to instances.
 type Backend struct {
 	Instance      *vast.Instance
-	baseURL       string // tunnel URL set by CheckHealth (e.g. "http://127.0.0.1:PORT/v1")
+	baseURL       string // tunnel URL set by CheckHealth (e.g. "http://127.0.0.1:PORT")
 	httpClient    *http.Client
 	tunnel        Tunnel
 	tunnelFactory TunnelFactory // creates tunnels; nil = use NewSSHTunnel
@@ -48,7 +48,7 @@ func (b *Backend) Token() string {
 	return b.Instance.JupyterToken
 }
 
-// BaseURL returns the URL to reach this backend's /v1 endpoint.
+// BaseURL returns the root URL to reach this backend (no /v1 suffix).
 func (b *Backend) BaseURL() string {
 	return b.baseURL
 }
@@ -106,7 +106,7 @@ func (b *Backend) CheckHealth(ctx context.Context) error {
 		return fmt.Errorf("no tunnel for instance %d", b.Instance.ID)
 	}
 
-	tunnelURL := fmt.Sprintf("http://%s/v1", b.tunnel.LocalAddr())
+	tunnelURL := fmt.Sprintf("http://%s", b.tunnel.LocalAddr())
 	if err := b.httpHealthCheck(ctx, tunnelURL); err != nil {
 		b.healthy.Store(false)
 		return fmt.Errorf("tunnel %s: %w", tunnelURL, err)
@@ -207,7 +207,7 @@ func (b *Backend) httpHealthCheck(ctx context.Context, baseURL string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/v1/models", nil)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func (b *Backend) FetchModel(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", b.baseURL+"/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", b.baseURL+"/v1/models", nil)
 	if err != nil {
 		return "", err
 	}
@@ -363,11 +363,7 @@ func (b *Backend) AbortAll(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// The /abort_request endpoint is at the server root, not under /v1.
-	// Strip /v1 suffix from baseURL to get the server root.
-	serverURL := strings.TrimSuffix(b.baseURL, "/v1")
-
-	req, err := http.NewRequestWithContext(ctx, "POST", serverURL+"/abort_request",
+	req, err := http.NewRequestWithContext(ctx, "POST", b.baseURL+"/abort_request",
 		strings.NewReader(`{"rid":""}`))
 	if err != nil {
 		return err

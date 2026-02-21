@@ -85,7 +85,7 @@ func TestCheckHealthViaTunnel(t *testing.T) {
 	if !be.IsHealthy() {
 		t.Error("expected healthy after successful check")
 	}
-	want := fmt.Sprintf("http://%s/v1", mock.localAddr)
+	want := fmt.Sprintf("http://%s", mock.localAddr)
 	if be.BaseURL() != want {
 		t.Errorf("BaseURL() = %q, want %q", be.BaseURL(), want)
 	}
@@ -344,7 +344,7 @@ func TestFetchModel(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
-	be.baseURL = srv.URL + "/v1"
+	be.baseURL = srv.URL
 
 	name, err := be.FetchModel(context.Background())
 	if err != nil {
@@ -363,7 +363,7 @@ func TestFetchModelNoModels(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
-	be.baseURL = srv.URL + "/v1"
+	be.baseURL = srv.URL
 
 	_, err := be.FetchModel(context.Background())
 	if err == nil {
@@ -583,7 +583,7 @@ func TestFetchModelHTTPError(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
-	be.baseURL = srv.URL + "/v1"
+	be.baseURL = srv.URL
 
 	_, err := be.FetchModel(context.Background())
 	if err == nil {
@@ -599,7 +599,7 @@ func TestFetchModelBadJSON(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
-	be.baseURL = srv.URL + "/v1"
+	be.baseURL = srv.URL
 
 	_, err := be.FetchModel(context.Background())
 	if err == nil {
@@ -649,7 +649,7 @@ func TestAbortAll(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
-	be.baseURL = srv.URL + "/v1"
+	be.baseURL = srv.URL
 
 	if err := be.AbortAll(context.Background()); err != nil {
 		t.Fatalf("AbortAll() error: %v", err)
@@ -673,7 +673,7 @@ func TestAbortAllHTTPError(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
-	be.baseURL = srv.URL + "/v1"
+	be.baseURL = srv.URL
 
 	err := be.AbortAll(context.Background())
 	if err == nil {
