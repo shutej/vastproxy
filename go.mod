@@ -1,4 +1,4 @@
-module vastproxy
+module github.com/shutej/vastproxy
 
 go 1.25.5
 
