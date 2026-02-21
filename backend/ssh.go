@@ -35,8 +35,8 @@ type SSHTunnel struct {
 var _ Tunnel = (*SSHTunnel)(nil)
 
 // NewSSHTunnel creates an SSH connection and establishes a local port forward.
-// It tries direct SSH first (publicIP:directPort), then falls back to
-// indirect SSH (sshHost:sshPort).
+// It tries proxy SSH first (sshHost:sshPort) as it is more reliable, then
+// falls back to direct SSH (publicIP:directPort).
 func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort int, keyPath string, remotePort int) (Tunnel, error) {
 	conn := &sshlib.Connect{}
 	conn.HostKeyCallback = ssh.InsecureIgnoreHostKey()
@@ -46,20 +46,20 @@ func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort in
 		return nil, fmt.Errorf("build auth: %w", err)
 	}
 
-	// Try direct SSH first.
+	// Try proxy SSH first (more reliable).
 	var connected bool
-	if publicIP != "" && directSSHPort != 0 {
-		if err := conn.CreateClient(publicIP, fmt.Sprintf("%d", directSSHPort), "root", auth); err == nil {
+	if sshHost != "" {
+		if err := conn.CreateClient(sshHost, fmt.Sprintf("%d", sshPort), "root", auth); err == nil {
 			connected = true
 		} else {
-			log.Printf("ssh: direct connect to %s:%d failed: %v", publicIP, directSSHPort, err)
+			log.Printf("ssh: proxy connect to %s:%d failed: %v", sshHost, sshPort, err)
 		}
 	}
 
-	// Fallback to indirect SSH.
-	if !connected && sshHost != "" {
-		if err := conn.CreateClient(sshHost, fmt.Sprintf("%d", sshPort), "root", auth); err != nil {
-			return nil, fmt.Errorf("ssh connect to %s:%d: %w", sshHost, sshPort, err)
+	// Fallback to direct SSH.
+	if !connected && publicIP != "" && directSSHPort != 0 {
+		if err := conn.CreateClient(publicIP, fmt.Sprintf("%d", directSSHPort), "root", auth); err != nil {
+			return nil, fmt.Errorf("ssh direct connect to %s:%d: %w", publicIP, directSSHPort, err)
 		}
 		connected = true
 	}
