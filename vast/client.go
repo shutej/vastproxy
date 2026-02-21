@@ -79,3 +79,26 @@ func (c *Client) AttachSSHKey(ctx context.Context, instanceID int, publicKey str
 	}
 	return nil
 }
+
+// DestroyInstance destroys a vast.ai instance permanently.
+// This is irreversible — all data on the instance is lost.
+func (c *Client) DestroyInstance(ctx context.Context, instanceID int) error {
+	url := fmt.Sprintf("%s/instances/%d/", c.baseURL, instanceID)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("destroy instance returned HTTP %d: %s", resp.StatusCode, body)
+	}
+	return nil
+}

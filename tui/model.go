@@ -19,25 +19,28 @@ type StickyPercenter interface {
 
 // Model is the bubbletea model for the proxy TUI.
 type Model struct {
-	instances    map[int]*InstanceView
-	order        []int // instance IDs in discovery order
-	listenAddr   string
-	err          error
-	eventCh      <-chan vast.InstanceEvent
-	gpuCh        <-chan backend.GPUUpdate
-	startWatcher func() // called once from Init to start the watcher
-	abortFn      func() // called to abort all backend inference
-	stickyStats  StickyPercenter
-	started      bool
-	width        int    // terminal width
-	height       int    // terminal height
-	scroll       int    // vertical scroll offset (in lines)
-	confirmAbort bool   // true when abort confirmation dialog is showing
-	abortStatus  string // transient status message after abort
+	instances      map[int]*InstanceView
+	order          []int // instance IDs in discovery order
+	listenAddr     string
+	err            error
+	eventCh        <-chan vast.InstanceEvent
+	gpuCh          <-chan backend.GPUUpdate
+	startWatcher   func() // called once from Init to start the watcher
+	abortFn        func() // called to abort all backend inference
+	destroyFn      func() // called to destroy all vast.ai instances
+	stickyStats    StickyPercenter
+	started        bool
+	width          int    // terminal width
+	height         int    // terminal height
+	scroll         int    // vertical scroll offset (in lines)
+	confirmAbort   bool   // true when abort confirmation dialog is showing
+	abortStatus    string // transient status message after abort
+	confirmDestroy bool   // true when destroy confirmation dialog is showing
+	destroyStatus  string // transient status message after destroy
 }
 
 // NewModel creates the TUI model.
-func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate, listenAddr string, startWatcher func(), abortFn func(), stickyStats StickyPercenter) Model {
+func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate, listenAddr string, startWatcher func(), abortFn func(), destroyFn func(), stickyStats StickyPercenter) Model {
 	return Model{
 		instances:    make(map[int]*InstanceView),
 		eventCh:      eventCh,
@@ -45,6 +48,7 @@ func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate,
 		listenAddr:   listenAddr,
 		startWatcher: startWatcher,
 		abortFn:      abortFn,
+		destroyFn:    destroyFn,
 		stickyStats:  stickyStats,
 	}
 }
@@ -90,12 +94,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.confirmDestroy {
+			switch msg.String() {
+			case "y", "Y":
+				m.confirmDestroy = false
+				m.destroyStatus = "Destroying..."
+				if m.destroyFn != nil {
+					go m.destroyFn()
+				}
+				log.Printf("tui: user confirmed destroy all")
+				return m, clearDestroyStatusAfter(3 * time.Second)
+			case "n", "N", "esc":
+				m.confirmDestroy = false
+				return m, nil
+			}
+			return m, nil
+		}
 
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "a":
 			m.confirmAbort = true
+			return m, nil
+		case "d":
+			m.confirmDestroy = true
 			return m, nil
 		case "up", "k":
 			m.scroll--
@@ -179,6 +202,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.abortStatus = ""
 		return m, nil
 
+	case DestroyClearedMsg:
+		m.destroyStatus = ""
+		return m, nil
+
 	case ErrorMsg:
 		m.err = msg.Error
 		return m, nil
@@ -208,10 +235,15 @@ func (m Model) View() string {
 	if m.abortStatus != "" {
 		footer.WriteString("  " + stateRemoving.Render(m.abortStatus) + "\n")
 	}
+	if m.destroyStatus != "" {
+		footer.WriteString("  " + stateRemoving.Render(m.destroyStatus) + "\n")
+	}
 	if m.confirmAbort {
 		footer.WriteString("  " + stateUnhealthy.Render("Abort all backend inference? (y/n)"))
+	} else if m.confirmDestroy {
+		footer.WriteString("  " + stateUnhealthy.Render("DESTROY all vast.ai instances? This is irreversible! (y/n)"))
 	} else {
-		footer.WriteString("  Press a to abort all | q to quit")
+		footer.WriteString("  Press a to abort all | d to destroy all | q to quit")
 	}
 	footerStr := footer.String()
 	footerLines := strings.Count(footerStr, "\n") + 1
@@ -402,5 +434,11 @@ func tickCmd() tea.Cmd {
 func clearAbortStatusAfter(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg {
 		return AbortClearedMsg{}
+	})
+}
+
+func clearDestroyStatusAfter(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg {
+		return DestroyClearedMsg{}
 	})
 }

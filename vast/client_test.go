@@ -124,6 +124,53 @@ func TestAttachSSHKeyNetworkError(t *testing.T) {
 	}
 }
 
+func TestDestroyInstance(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/instances/42/" {
+			t.Errorf("path = %s, want /instances/42/", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Errorf("Authorization = %q, want Bearer test-key", got)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"success":true}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient("test-key", srv.URL)
+	err := c.DestroyInstance(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("DestroyInstance() error: %v", err)
+	}
+}
+
+func TestDestroyInstanceError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := newTestClient("key", srv.URL)
+	err := c.DestroyInstance(context.Background(), 999)
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+}
+
+func TestDestroyInstanceNetworkError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close()
+
+	c := newTestClient("key", srv.URL)
+	err := c.DestroyInstance(context.Background(), 1)
+	if err == nil {
+		t.Fatal("expected error for closed server")
+	}
+}
+
 // newTestClient creates a Client pointing at a test server instead of the real API.
 func newTestClient(apiKey, baseURL string) *Client {
 	c := NewClient(apiKey)

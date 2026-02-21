@@ -99,7 +99,10 @@ func main() {
 	abortFn := func() {
 		balancer.AbortAll(context.Background())
 	}
-	tuiModel := tui.NewModel(tuiEventCh, gpuCh, listenAddr, startWatcher, abortFn, stickyStats)
+	destroyFn := func() {
+		watcher.DestroyAll(context.Background())
+	}
+	tuiModel := tui.NewModel(tuiEventCh, gpuCh, listenAddr, startWatcher, abortFn, destroyFn, stickyStats)
 	p := tea.NewProgram(tuiModel, tea.WithAltScreen())
 
 	go func() {

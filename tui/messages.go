@@ -36,3 +36,6 @@ type TickMsg time.Time
 
 // AbortClearedMsg clears the abort status message after a delay.
 type AbortClearedMsg struct{}
+
+// DestroyClearedMsg clears the destroy status message after a delay.
+type DestroyClearedMsg struct{}

@@ -139,6 +139,26 @@ func (w *Watcher) InjectInstance(inst *Instance) {
 	w.instances[inst.ID] = inst
 }
 
+// DestroyAll destroys all tracked instances via the vast.ai API.
+func (w *Watcher) DestroyAll(ctx context.Context) {
+	w.mu.RLock()
+	ids := make([]int, 0, len(w.instances))
+	for id, inst := range w.instances {
+		if inst.State != StateRemoving {
+			ids = append(ids, id)
+		}
+	}
+	w.mu.RUnlock()
+
+	for _, id := range ids {
+		if err := w.client.DestroyInstance(ctx, id); err != nil {
+			log.Printf("vast watcher: destroy instance %d failed: %v", id, err)
+		} else {
+			log.Printf("vast watcher: destroyed instance %d", id)
+		}
+	}
+}
+
 // SetInstanceState updates an instance's state (called from backend manager).
 func (w *Watcher) SetInstanceState(id int, state InstanceState) {
 	w.mu.Lock()
