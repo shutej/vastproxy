@@ -42,8 +42,9 @@ func TestReverseProxyRouting(t *testing.T) {
 	backendSrv := fakeBackendServer(t)
 	defer backendSrv.Close()
 
-	inst := &vast.Instance{ID: 1, BaseURL: backendSrv.URL + "/v1", JupyterToken: "secret"}
+	inst := &vast.Instance{ID: 1, JupyterToken: "secret"}
 	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL(backendSrv.URL + "/v1")
 	be.SetHealthy(true)
 
 	bal := NewBalancer()
@@ -85,8 +86,9 @@ func TestReverseProxyBearerAuth(t *testing.T) {
 	backendSrv := fakeBackendServer(t)
 	defer backendSrv.Close()
 
-	inst := &vast.Instance{ID: 1, BaseURL: backendSrv.URL + "/v1", JupyterToken: "my-token"}
+	inst := &vast.Instance{ID: 1, JupyterToken: "my-token"}
 	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL(backendSrv.URL + "/v1")
 	be.SetHealthy(true)
 
 	bal := NewBalancer()
@@ -128,8 +130,9 @@ func TestReverseProxySSEStreaming(t *testing.T) {
 	backendSrv := sseBackendServer(t)
 	defer backendSrv.Close()
 
-	inst := &vast.Instance{ID: 1, BaseURL: backendSrv.URL + "/v1", JupyterToken: "tok"}
+	inst := &vast.Instance{ID: 1, JupyterToken: "tok"}
 	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL(backendSrv.URL + "/v1")
 	be.SetHealthy(true)
 
 	bal := NewBalancer()
@@ -154,8 +157,9 @@ func TestReverseProxyAcquireRelease(t *testing.T) {
 	backendSrv := fakeBackendServer(t)
 	defer backendSrv.Close()
 
-	inst := &vast.Instance{ID: 1, BaseURL: backendSrv.URL + "/v1"}
+	inst := &vast.Instance{ID: 1}
 	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL(backendSrv.URL + "/v1")
 	be.SetHealthy(true)
 
 	bal := NewBalancer()
@@ -192,8 +196,9 @@ func TestReverseProxyRoundRobinDistribution(t *testing.T) {
 
 	backends := make([]*backend.Backend, 3)
 	for i, srv := range servers {
-		inst := &vast.Instance{ID: i + 1, BaseURL: srv.URL + "/v1"}
+		inst := &vast.Instance{ID: i + 1}
 		backends[i] = backend.NewBackend(inst, "", nil)
+		backends[i].SetBaseURL(srv.URL + "/v1")
 		backends[i].SetHealthy(true)
 	}
 
@@ -247,8 +252,9 @@ func TestReverseProxyRoundRobinSkipsUnhealthy(t *testing.T) {
 
 	backends := make([]*backend.Backend, 3)
 	for i, srv := range servers {
-		inst := &vast.Instance{ID: i + 1, BaseURL: srv.URL + "/v1"}
+		inst := &vast.Instance{ID: i + 1}
 		backends[i] = backend.NewBackend(inst, "", nil)
+		backends[i].SetBaseURL(srv.URL + "/v1")
 	}
 	backends[0].SetHealthy(true)  // ID 1 — healthy
 	backends[1].SetHealthy(false) // ID 2 — unhealthy
@@ -296,8 +302,9 @@ func TestReverseProxyConcurrentRoundRobin(t *testing.T) {
 
 	backends := make([]*backend.Backend, 3)
 	for i, srv := range servers {
-		inst := &vast.Instance{ID: i + 1, BaseURL: srv.URL + "/v1"}
+		inst := &vast.Instance{ID: i + 1}
 		backends[i] = backend.NewBackend(inst, "", nil)
+		backends[i].SetBaseURL(srv.URL + "/v1")
 		backends[i].SetHealthy(true)
 	}
 
@@ -350,8 +357,9 @@ func TestReverseProxyConcurrentRoundRobin(t *testing.T) {
 
 func TestReverseProxyBadBackendURL(t *testing.T) {
 	// Backend with an unparseable URL should return 500.
-	inst := &vast.Instance{ID: 1, BaseURL: "://bad-url"}
+	inst := &vast.Instance{ID: 1}
 	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL("://bad-url")
 	be.SetHealthy(true)
 
 	bal := NewBalancer()
@@ -379,8 +387,9 @@ func TestReverseProxyBackendError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := &vast.Instance{ID: 1, BaseURL: srv.URL + "/v1"}
+	inst := &vast.Instance{ID: 1}
 	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL(srv.URL + "/v1")
 	be.SetHealthy(true)
 
 	bal := NewBalancer()
@@ -405,8 +414,9 @@ func TestReverseProxyForwardsRequestBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := &vast.Instance{ID: 1, BaseURL: srv.URL + "/v1"}
+	inst := &vast.Instance{ID: 1}
 	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL(srv.URL + "/v1")
 	be.SetHealthy(true)
 
 	bal := NewBalancer()

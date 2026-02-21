@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -16,10 +15,10 @@ import (
 )
 
 // Backend represents a single SGLang backend instance.
+// All HTTP traffic is routed through an SSH tunnel — no direct HTTP to instances.
 type Backend struct {
 	Instance      *vast.Instance
-	directURL     string // original direct HTTP URL, never overwritten
-	baseURL       string // URL currently used for proxying (direct or tunnel)
+	baseURL       string // tunnel URL set by CheckHealth (e.g. "http://127.0.0.1:PORT/v1")
 	httpClient    *http.Client
 	tunnel        Tunnel
 	tunnelFactory TunnelFactory // creates tunnels; nil = use NewSSHTunnel
@@ -35,14 +34,9 @@ type Backend struct {
 // NewBackend creates a backend for the given instance.
 func NewBackend(inst *vast.Instance, keyPath string, vastClient *vast.Client) *Backend {
 	return &Backend{
-		Instance:  inst,
-		directURL: inst.BaseURL,
-		baseURL:   inst.BaseURL,
+		Instance: inst,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
 		},
 		keyPath:    keyPath,
 		vastClient: vastClient,
@@ -89,6 +83,11 @@ func (b *Backend) SetHealthy(v bool) {
 	b.healthy.Store(v)
 }
 
+// SetBaseURL sets the base URL directly (used in tests).
+func (b *Backend) SetBaseURL(url string) {
+	b.baseURL = url
+}
+
 // SetTunnel injects a tunnel (used in tests with mock tunnels).
 func (b *Backend) SetTunnel(t Tunnel) {
 	b.tunnel = t
@@ -99,44 +98,27 @@ func (b *Backend) SetTunnelFactory(f TunnelFactory) {
 	b.tunnelFactory = f
 }
 
-// CheckHealth verifies connectivity to the backend via HTTP.
-// Tries direct URL first, then falls back to the SSH tunnel if available.
+// CheckHealth verifies connectivity to the backend via the SSH tunnel.
+// All HTTP traffic goes through the tunnel — no direct HTTP to instances.
 func (b *Backend) CheckHealth(ctx context.Context) error {
-	var lastErr error
-
-	// Always try the direct URL first (never lose it to a tunnel overwrite).
-	if b.directURL != "" {
-		if err := b.httpHealthCheck(ctx, b.directURL); err == nil {
-			b.baseURL = b.directURL
-			b.healthy.Store(true)
-			log.Printf("backend %d: health OK via direct %s", b.Instance.ID, b.directURL)
-			return nil
-		} else {
-			lastErr = fmt.Errorf("direct %s: %w", b.directURL, err)
-		}
+	if b.tunnel == nil {
+		b.healthy.Store(false)
+		return fmt.Errorf("no tunnel for instance %d", b.Instance.ID)
 	}
 
-	// Try via SSH tunnel (if EnsureSSH was called beforehand).
-	if b.tunnel != nil {
-		tunnelURL := fmt.Sprintf("http://%s/v1", b.tunnel.LocalAddr())
-		if err := b.httpHealthCheck(ctx, tunnelURL); err == nil {
-			b.baseURL = tunnelURL
-			b.healthy.Store(true)
-			log.Printf("backend %d: health OK via tunnel %s", b.Instance.ID, tunnelURL)
-			return nil
-		} else {
-			lastErr = fmt.Errorf("tunnel %s: %w", tunnelURL, err)
-		}
+	tunnelURL := fmt.Sprintf("http://%s/v1", b.tunnel.LocalAddr())
+	if err := b.httpHealthCheck(ctx, tunnelURL); err != nil {
+		b.healthy.Store(false)
+		return fmt.Errorf("tunnel %s: %w", tunnelURL, err)
 	}
 
-	b.healthy.Store(false)
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("no base URL or tunnel for instance %d", b.Instance.ID)
+	b.baseURL = tunnelURL
+	b.healthy.Store(true)
+	log.Printf("backend %d: health OK via tunnel %s", b.Instance.ID, tunnelURL)
+	return nil
 }
 
-// EnsureSSH establishes an SSH connection for GPU metrics (best-effort).
+// EnsureSSH establishes an SSH tunnel for all HTTP traffic and GPU metrics.
 // Returns true if SSH is available.
 func (b *Backend) EnsureSSH() bool {
 	if b.tunnel != nil {
@@ -309,7 +291,7 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Best-effort SSH — needed for tunnel fallback and GPU metrics.
+			// SSH tunnel is required for all HTTP traffic and GPU metrics.
 			b.EnsureSSH()
 
 			if err := b.CheckHealth(ctx); err != nil {

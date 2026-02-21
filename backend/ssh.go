@@ -19,6 +19,7 @@ type Tunnel interface {
 	LocalAddr() string
 	RunCommand(command string) (string, error)
 	Close()
+	IsDirect() bool // true if connected via direct SSH (publicIP:port)
 }
 
 // TunnelFactory creates a Tunnel. The default uses real SSH via NewSSHTunnel.
@@ -29,6 +30,7 @@ type SSHTunnel struct {
 	conn      *sshlib.Connect
 	listener  net.Listener
 	localAddr string // "127.0.0.1:<port>" — assigned after Start
+	isDirect  bool   // true if connected via direct SSH
 }
 
 // Verify SSHTunnel implements Tunnel at compile time.
@@ -48,6 +50,7 @@ func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort in
 
 	// Try proxy SSH first (more reliable).
 	var connected bool
+	var isDirect bool
 	if sshHost != "" {
 		if err := conn.CreateClient(sshHost, fmt.Sprintf("%d", sshPort), "root", auth); err == nil {
 			connected = true
@@ -62,6 +65,7 @@ func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort in
 			return nil, fmt.Errorf("ssh direct connect to %s:%d: %w", publicIP, directSSHPort, err)
 		}
 		connected = true
+		isDirect = true
 	}
 
 	if !connected {
@@ -85,6 +89,7 @@ func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort in
 	tunnel := &SSHTunnel{
 		conn:      conn,
 		localAddr: localAddr,
+		isDirect:  isDirect,
 	}
 
 	// Start the local port forward in the background.
@@ -138,6 +143,12 @@ func forward(a, b net.Conn) {
 // LocalAddr returns the local address of the tunnel (e.g., "127.0.0.1:54321").
 func (t *SSHTunnel) LocalAddr() string {
 	return t.localAddr
+}
+
+// IsDirect returns true if the tunnel connected via direct SSH (publicIP:port)
+// rather than the vast.ai proxy SSH endpoint.
+func (t *SSHTunnel) IsDirect() bool {
+	return t.isDirect
 }
 
 // RunCommand executes a command over SSH and returns stdout.

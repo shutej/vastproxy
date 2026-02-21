@@ -14,10 +14,9 @@ import (
 	"vastproxy/vast"
 )
 
-func testInstance(id int, baseURL string) *vast.Instance {
+func testInstance(id int) *vast.Instance {
 	return &vast.Instance{
 		ID:           id,
-		BaseURL:      baseURL,
 		JupyterToken: "test-token",
 		PublicIPAddr:  "1.2.3.4",
 		SSHHost:       "ssh.example.com",
@@ -32,12 +31,14 @@ type mockTunnel struct {
 	cmdOutput  string
 	cmdErr     error
 	closedFlag atomic.Bool
+	direct     bool // whether this mock represents a direct SSH connection
 }
 
 func (m *mockTunnel) LocalAddr() string                      { return m.localAddr }
 func (m *mockTunnel) RunCommand(cmd string) (string, error)  { return m.cmdOutput, m.cmdErr }
 func (m *mockTunnel) Close()                                 { m.closedFlag.Store(true) }
 func (m *mockTunnel) IsClosed() bool                         { return m.closedFlag.Load() }
+func (m *mockTunnel) IsDirect() bool                         { return m.direct }
 
 // mockTunnelFactory returns a TunnelFactory that produces the given mock.
 func mockTunnelFactory(t Tunnel, err error) TunnelFactory {
@@ -48,18 +49,18 @@ func mockTunnelFactory(t Tunnel, err error) TunnelFactory {
 
 // --- Basic tests ---
 
-func TestNewBackendPreservesDirectURL(t *testing.T) {
-	inst := testInstance(1, "http://example.com/v1")
+func TestNewBackend(t *testing.T) {
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
-	if be.BaseURL() != "http://example.com/v1" {
-		t.Errorf("BaseURL() = %q", be.BaseURL())
+	if be.BaseURL() != "" {
+		t.Errorf("BaseURL() = %q, want empty before tunnel", be.BaseURL())
 	}
 	if be.Token() != "test-token" {
 		t.Errorf("Token() = %q", be.Token())
 	}
 }
 
-func TestCheckHealthDirect(t *testing.T) {
+func TestCheckHealthViaTunnel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			t.Errorf("path = %s, want /v1/models", r.URL.Path)
@@ -72,8 +73,10 @@ func TestCheckHealthDirect(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	mock := &mockTunnel{localAddr: srv.Listener.Addr().String()}
+	be.SetTunnel(mock)
 
 	err := be.CheckHealth(context.Background())
 	if err != nil {
@@ -82,19 +85,22 @@ func TestCheckHealthDirect(t *testing.T) {
 	if !be.IsHealthy() {
 		t.Error("expected healthy after successful check")
 	}
-	if be.BaseURL() != srv.URL+"/v1" {
-		t.Errorf("BaseURL() = %q, expected direct URL preserved", be.BaseURL())
+	want := fmt.Sprintf("http://%s/v1", mock.localAddr)
+	if be.BaseURL() != want {
+		t.Errorf("BaseURL() = %q, want %q", be.BaseURL(), want)
 	}
 }
 
-func TestCheckHealthDirectFailure(t *testing.T) {
+func TestCheckHealthTunnelFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	mock := &mockTunnel{localAddr: srv.Listener.Addr().String()}
+	be.SetTunnel(mock)
 
 	err := be.CheckHealth(context.Background())
 	if err == nil {
@@ -105,72 +111,20 @@ func TestCheckHealthDirectFailure(t *testing.T) {
 	}
 }
 
-func TestCheckHealthPreservesDirectURLAfterTunnelFallback(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"data":[]}`))
-	}))
-	defer srv.Close()
-
-	inst := testInstance(1, srv.URL+"/v1")
-	be := NewBackend(inst, "", nil)
-
-	be.CheckHealth(context.Background())
-	directURL := be.BaseURL()
-
-	be.CheckHealth(context.Background())
-	if be.BaseURL() != directURL {
-		t.Errorf("BaseURL changed from %q to %q", directURL, be.BaseURL())
-	}
-}
-
-// --- Tunnel fallback tests ---
-
-func TestCheckHealthFallsBackToTunnel(t *testing.T) {
-	// Direct URL fails (bad URL), but tunnel works.
-	tunnelSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"data":[]}`))
-	}))
-	defer tunnelSrv.Close()
-
-	inst := testInstance(1, "http://192.0.2.1:1/v1") // unreachable direct URL
-	inst.JupyterToken = ""                             // no auth needed for test
-	be := NewBackend(inst, "", nil)
-	// Shorten timeout so test doesn't wait 5 seconds.
-	be.httpClient.Timeout = 200 * time.Millisecond
-
-	mock := &mockTunnel{localAddr: tunnelSrv.Listener.Addr().String()}
-	be.SetTunnel(mock)
-
-	err := be.CheckHealth(context.Background())
-	if err != nil {
-		t.Fatalf("CheckHealth() error: %v", err)
-	}
-	if !be.IsHealthy() {
-		t.Error("expected healthy via tunnel fallback")
-	}
-	// BaseURL should now be the tunnel URL.
-	want := fmt.Sprintf("http://%s/v1", mock.localAddr)
-	if be.BaseURL() != want {
-		t.Errorf("BaseURL() = %q, want %q", be.BaseURL(), want)
-	}
-}
-
-func TestCheckHealthNoDirectNoTunnel(t *testing.T) {
-	inst := testInstance(1, "")
+func TestCheckHealthNoTunnel(t *testing.T) {
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	err := be.CheckHealth(context.Background())
 	if err == nil {
-		t.Fatal("expected error with no direct URL and no tunnel")
+		t.Fatal("expected error with no tunnel")
 	}
 }
 
 // --- EnsureSSH tests ---
 
 func TestEnsureSSHWithMockFactory(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	mock := &mockTunnel{localAddr: "127.0.0.1:55555"}
@@ -189,7 +143,7 @@ func TestEnsureSSHWithMockFactory(t *testing.T) {
 }
 
 func TestEnsureSSHFactoryError(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("ssh connection refused")))
 
@@ -203,7 +157,7 @@ func TestEnsureSSHFactoryError(t *testing.T) {
 }
 
 func TestEnsureSSHBackoff(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("connection refused")))
 
@@ -217,7 +171,7 @@ func TestEnsureSSHBackoff(t *testing.T) {
 }
 
 func TestEnsureSSHResetsFailCountOnSuccess(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	// First: fail a few times.
@@ -245,7 +199,7 @@ func TestEnsureSSHResetsFailCountOnSuccess(t *testing.T) {
 // --- FetchGPUMetrics tests ---
 
 func TestFetchGPUMetrics(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	mock := &mockTunnel{cmdOutput: "85, 72"}
@@ -267,7 +221,7 @@ func TestFetchGPUMetrics(t *testing.T) {
 }
 
 func TestFetchGPUMetricsNoTunnel(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	_, err := be.FetchGPUMetrics()
@@ -277,7 +231,7 @@ func TestFetchGPUMetricsNoTunnel(t *testing.T) {
 }
 
 func TestFetchGPUMetricsCommandError(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	mock := &mockTunnel{cmdErr: fmt.Errorf("session closed")}
@@ -292,7 +246,7 @@ func TestFetchGPUMetricsCommandError(t *testing.T) {
 // --- Acquire/Release tests ---
 
 func TestAcquireRelease(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	if be.ActiveRequests() != 0 {
@@ -312,7 +266,7 @@ func TestAcquireRelease(t *testing.T) {
 }
 
 func TestAcquireReleaseConcurrent(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	var wg sync.WaitGroup
@@ -334,7 +288,7 @@ func TestAcquireReleaseConcurrent(t *testing.T) {
 // --- SetHealthy / Close tests ---
 
 func TestSetHealthy(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	if be.IsHealthy() {
@@ -351,7 +305,7 @@ func TestSetHealthy(t *testing.T) {
 }
 
 func TestCloseWithoutTunnel(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 	be.SetHealthy(true)
 
@@ -362,7 +316,7 @@ func TestCloseWithoutTunnel(t *testing.T) {
 }
 
 func TestCloseWithTunnel(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 	be.SetHealthy(true)
 
@@ -388,8 +342,9 @@ func TestFetchModel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.baseURL = srv.URL + "/v1"
 
 	name, err := be.FetchModel(context.Background())
 	if err != nil {
@@ -406,8 +361,9 @@ func TestFetchModelNoModels(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.baseURL = srv.URL + "/v1"
 
 	_, err := be.FetchModel(context.Background())
 	if err == nil {
@@ -416,7 +372,7 @@ func TestFetchModelNoModels(t *testing.T) {
 }
 
 func TestFetchModelNoBaseURL(t *testing.T) {
-	inst := testInstance(1, "")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	_, err := be.FetchModel(context.Background())
@@ -426,7 +382,7 @@ func TestFetchModelNoBaseURL(t *testing.T) {
 }
 
 func TestHTTPClient(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 	if be.HTTPClient() == nil {
 		t.Fatal("HTTPClient() returned nil")
@@ -447,10 +403,10 @@ func TestStartHealthLoopTransitionsToHealthy(t *testing.T) {
 	watcher := vast.NewWatcher(nil, time.Hour)
 	watcher.InjectInstance(&vast.Instance{ID: 1, State: vast.StateConnecting})
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
-	// Use a mock tunnel factory that fails — SSH shouldn't block health.
-	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("no ssh")))
+	mock := &mockTunnel{localAddr: srv.Listener.Addr().String(), cmdOutput: "50, 60"}
+	be.SetTunnelFactory(mockTunnelFactory(mock, nil))
 
 	gpuCh := make(chan GPUUpdate, 10)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -488,12 +444,12 @@ func TestStartHealthLoopGPUMetrics(t *testing.T) {
 	watcher := vast.NewWatcher(nil, time.Hour)
 	watcher.InjectInstance(&vast.Instance{ID: 1, State: vast.StateConnecting})
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
-	// Inject a mock tunnel that returns GPU metrics.
+	// Inject a mock tunnel that returns GPU metrics and points at the test server.
 	mock := &mockTunnel{
-		localAddr: "127.0.0.1:0",
+		localAddr: srv.Listener.Addr().String(),
 		cmdOutput: "92, 68",
 	}
 	be.SetTunnel(mock)
@@ -534,12 +490,13 @@ func TestStartHealthLoopTunnelBreakAndRecover(t *testing.T) {
 	watcher := vast.NewWatcher(nil, time.Hour)
 	watcher.InjectInstance(&vast.Instance{ID: 1, State: vast.StateConnecting})
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
-	// Start with a tunnel that returns errors (simulating a broken session).
+	// Start with a tunnel that points at the server but returns GPU metric errors
+	// (simulating a broken SSH session while health checks still succeed).
 	brokenMock := &mockTunnel{
-		localAddr: "127.0.0.1:0",
+		localAddr: srv.Listener.Addr().String(),
 		cmdErr:    fmt.Errorf("broken pipe"),
 	}
 	be.SetTunnel(brokenMock)
@@ -575,10 +532,12 @@ func TestStartHealthLoopUnhealthyThenRemoved(t *testing.T) {
 	watcher := vast.NewWatcher(nil, time.Hour)
 	watcher.InjectInstance(&vast.Instance{ID: 1, State: vast.StateHealthy})
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 	be.SetHealthy(true) // start healthy
-	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("no ssh")))
+	mock := &mockTunnel{localAddr: srv.Listener.Addr().String()}
+	be.SetTunnel(mock)
+	be.SetTunnelFactory(mockTunnelFactory(mock, nil))
 
 	gpuCh := make(chan GPUUpdate, 10)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -622,8 +581,9 @@ func TestFetchModelHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.baseURL = srv.URL + "/v1"
 
 	_, err := be.FetchModel(context.Background())
 	if err == nil {
@@ -637,8 +597,9 @@ func TestFetchModelBadJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.baseURL = srv.URL + "/v1"
 
 	_, err := be.FetchModel(context.Background())
 	if err == nil {
@@ -648,7 +609,7 @@ func TestFetchModelBadJSON(t *testing.T) {
 
 func TestEnsureSSHAuthFailureDoesNotPushKey(t *testing.T) {
 	// SSH key push via API is disabled — verify it stays off.
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "/nonexistent/key", nil)
 	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("unable to authenticate")))
 
@@ -662,7 +623,7 @@ func TestEnsureSSHAuthFailureDoesNotPushKey(t *testing.T) {
 }
 
 func TestEnsureSSHHandshakeFailureDoesNotPushKey(t *testing.T) {
-	inst := testInstance(1, "http://localhost/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "/nonexistent/key", nil)
 	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("handshake failed")))
 
@@ -672,28 +633,6 @@ func TestEnsureSSHHandshakeFailureDoesNotPushKey(t *testing.T) {
 
 	if be.sshKeyPushed {
 		t.Error("sshKeyPushed should be false (SSH key push is disabled)")
-	}
-}
-
-func TestCheckHealthTunnelOnly(t *testing.T) {
-	// No direct URL, only tunnel.
-	tunnelSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"data":[]}`))
-	}))
-	defer tunnelSrv.Close()
-
-	inst := testInstance(1, "") // no direct URL
-	be := NewBackend(inst, "", nil)
-	mock := &mockTunnel{localAddr: tunnelSrv.Listener.Addr().String()}
-	be.SetTunnel(mock)
-
-	err := be.CheckHealth(context.Background())
-	if err != nil {
-		t.Fatalf("CheckHealth() error: %v", err)
-	}
-	if !be.IsHealthy() {
-		t.Error("expected healthy via tunnel only")
 	}
 }
 
@@ -708,8 +647,9 @@ func TestAbortAll(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.baseURL = srv.URL + "/v1"
 
 	if err := be.AbortAll(context.Background()); err != nil {
 		t.Fatalf("AbortAll() error: %v", err)
@@ -731,8 +671,9 @@ func TestAbortAllHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := testInstance(1, srv.URL+"/v1")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.baseURL = srv.URL + "/v1"
 
 	err := be.AbortAll(context.Background())
 	if err == nil {
@@ -741,7 +682,7 @@ func TestAbortAllHTTPError(t *testing.T) {
 }
 
 func TestAbortAllNoBaseURL(t *testing.T) {
-	inst := testInstance(1, "")
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
 
 	err := be.AbortAll(context.Background())
@@ -754,9 +695,8 @@ func TestStartHealthLoopContextCancel(t *testing.T) {
 	watcher := vast.NewWatcher(nil, time.Hour)
 	watcher.InjectInstance(&vast.Instance{ID: 1, State: vast.StateConnecting})
 
-	inst := testInstance(1, "http://192.0.2.1:1/v1") // unreachable
+	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
-	be.httpClient.Timeout = 100 * time.Millisecond
 	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("no ssh")))
 
 	gpuCh := make(chan GPUUpdate, 10)

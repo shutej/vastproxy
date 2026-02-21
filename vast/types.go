@@ -59,9 +59,7 @@ type Instance struct {
 	State          InstanceState    `json:"-"`
 	StateChangedAt time.Time        `json:"-"`
 	ContainerPort  int              `json:"-"`
-	HostPort       int              `json:"-"`
 	DirectSSHPort  int              `json:"-"`
-	BaseURL        string           `json:"-"`
 	ModelName      string           `json:"-"`
 }
 

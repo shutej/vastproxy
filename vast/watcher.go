@@ -2,7 +2,6 @@ package vast
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -95,17 +94,13 @@ func (w *Watcher) poll(ctx context.Context) {
 
 		existing, ok := w.instances[inst.ID]
 		if !ok {
-			// New instance.
+			// New instance — all HTTP traffic goes through SSH tunnel.
 			inst.ContainerPort = inst.ResolveContainerPort()
-			inst.HostPort = inst.ResolveHostPort()
 			inst.DirectSSHPort = inst.ResolveDirectSSHPort()
 			inst.State = StateDiscovered
 			inst.StateChangedAt = time.Now()
-			if inst.PublicIPAddr != "" && inst.HostPort != 0 {
-				inst.BaseURL = fmt.Sprintf("http://%s:%d/v1", inst.PublicIPAddr, inst.HostPort)
-			}
-			log.Printf("vast watcher: new instance %d: publicIP=%s hostPort=%d containerPort=%d directSSH=%d baseURL=%s ssh=%s:%d",
-				inst.ID, inst.PublicIPAddr, inst.HostPort, inst.ContainerPort, inst.DirectSSHPort, inst.BaseURL, inst.SSHHost, inst.SSHPort)
+			log.Printf("vast watcher: new instance %d: publicIP=%s containerPort=%d directSSH=%d ssh=%s:%d",
+				inst.ID, inst.PublicIPAddr, inst.ContainerPort, inst.DirectSSHPort, inst.SSHHost, inst.SSHPort)
 			w.instances[inst.ID] = inst
 			w.emit(InstanceEvent{Type: "added", Instance: inst})
 		} else {

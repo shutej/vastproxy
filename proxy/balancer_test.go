@@ -12,8 +12,9 @@ import (
 )
 
 func makeBackend(id int, healthy bool) *backend.Backend {
-	inst := &vast.Instance{ID: id, BaseURL: "http://localhost/v1", JupyterToken: "tok"}
+	inst := &vast.Instance{ID: id, JupyterToken: "tok"}
 	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL("http://localhost/v1")
 	if healthy {
 		be.SetHealthy(true)
 	}
@@ -280,10 +281,12 @@ func TestBalancerAbortAll(t *testing.T) {
 	defer srv.Close()
 
 	bal := NewBalancer()
-	b1 := &vast.Instance{ID: 1, BaseURL: srv.URL + "/v1", JupyterToken: "tok"}
-	b2 := &vast.Instance{ID: 2, BaseURL: srv.URL + "/v1", JupyterToken: "tok"}
+	b1 := &vast.Instance{ID: 1, JupyterToken: "tok"}
+	b2 := &vast.Instance{ID: 2, JupyterToken: "tok"}
 	be1 := backend.NewBackend(b1, "", nil)
 	be2 := backend.NewBackend(b2, "", nil)
+	be1.SetBaseURL(srv.URL + "/v1")
+	be2.SetBaseURL(srv.URL + "/v1")
 	be1.SetHealthy(true)
 	be2.SetHealthy(true)
 	bal.SetBackends([]*backend.Backend{be1, be2})
@@ -307,10 +310,12 @@ func TestBalancerAbortAllSkipsUnhealthy(t *testing.T) {
 	defer srv.Close()
 
 	bal := NewBalancer()
-	b1 := &vast.Instance{ID: 1, BaseURL: srv.URL + "/v1", JupyterToken: "tok"}
-	b2 := &vast.Instance{ID: 2, BaseURL: srv.URL + "/v1", JupyterToken: "tok"}
+	b1 := &vast.Instance{ID: 1, JupyterToken: "tok"}
+	b2 := &vast.Instance{ID: 2, JupyterToken: "tok"}
 	be1 := backend.NewBackend(b1, "", nil)
 	be2 := backend.NewBackend(b2, "", nil)
+	be1.SetBaseURL(srv.URL + "/v1")
+	be2.SetBaseURL(srv.URL + "/v1")
 	be1.SetHealthy(true)
 	be2.SetHealthy(false) // unhealthy — should be skipped
 	bal.SetBackends([]*backend.Backend{be1, be2})
