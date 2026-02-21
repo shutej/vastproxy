@@ -255,11 +255,14 @@ func TestFetchGPUMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchGPUMetrics() error: %v", err)
 	}
-	if metrics.Utilization != 85 {
-		t.Errorf("Utilization = %f, want 85", metrics.Utilization)
+	if len(metrics.GPUs) != 1 {
+		t.Fatalf("GPUs len = %d, want 1", len(metrics.GPUs))
 	}
-	if metrics.Temperature != 72 {
-		t.Errorf("Temperature = %f, want 72", metrics.Temperature)
+	if metrics.GPUs[0].Utilization != 85 {
+		t.Errorf("Utilization = %f, want 85", metrics.GPUs[0].Utilization)
+	}
+	if metrics.GPUs[0].Temperature != 72 {
+		t.Errorf("Temperature = %f, want 72", metrics.GPUs[0].Temperature)
 	}
 }
 
@@ -508,11 +511,14 @@ func TestStartHealthLoopGPUMetrics(t *testing.T) {
 		if update.InstanceID != 1 {
 			t.Errorf("InstanceID = %d, want 1", update.InstanceID)
 		}
-		if update.Utilization != 92 {
-			t.Errorf("Utilization = %f, want 92", update.Utilization)
+		if len(update.GPUs) != 1 {
+			t.Fatalf("GPUs len = %d, want 1", len(update.GPUs))
 		}
-		if update.Temperature != 68 {
-			t.Errorf("Temperature = %f, want 68", update.Temperature)
+		if update.GPUs[0].Utilization != 92 {
+			t.Errorf("Utilization = %f, want 92", update.GPUs[0].Utilization)
+		}
+		if update.GPUs[0].Temperature != 68 {
+			t.Errorf("Temperature = %f, want 68", update.GPUs[0].Temperature)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for GPU update")

@@ -23,11 +23,6 @@ func TestParseNvidiaSmi(t *testing.T) {
 			wantU: 42, wantT: 65,
 		},
 		{
-			name:  "multiline takes first",
-			input: "10, 20\n30, 40",
-			wantU: 10, wantT: 20,
-		},
-		{
 			name:  "zero values",
 			input: "0, 0",
 			wantU: 0, wantT: 0,
@@ -81,12 +76,73 @@ func TestParseNvidiaSmi(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if m.Utilization != tt.wantU {
-				t.Errorf("Utilization = %f, want %f", m.Utilization, tt.wantU)
+			if len(m.GPUs) != 1 {
+				t.Fatalf("GPUs len = %d, want 1", len(m.GPUs))
 			}
-			if m.Temperature != tt.wantT {
-				t.Errorf("Temperature = %f, want %f", m.Temperature, tt.wantT)
+			if m.GPUs[0].Utilization != tt.wantU {
+				t.Errorf("Utilization = %f, want %f", m.GPUs[0].Utilization, tt.wantU)
+			}
+			if m.GPUs[0].Temperature != tt.wantT {
+				t.Errorf("Temperature = %f, want %f", m.GPUs[0].Temperature, tt.wantT)
 			}
 		})
+	}
+}
+
+func TestParseNvidiaSmiMultiGPU(t *testing.T) {
+	input := "98, 73\n45, 60\n12, 55\n"
+	m, err := ParseNvidiaSmi(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(m.GPUs) != 3 {
+		t.Fatalf("GPUs len = %d, want 3", len(m.GPUs))
+	}
+
+	want := []GPUMetric{
+		{Utilization: 98, Temperature: 73},
+		{Utilization: 45, Temperature: 60},
+		{Utilization: 12, Temperature: 55},
+	}
+	for i, g := range m.GPUs {
+		if g != want[i] {
+			t.Errorf("GPU[%d] = %+v, want %+v", i, g, want[i])
+		}
+	}
+}
+
+func TestParseNvidiaSmiMultiGPUWithBlankLines(t *testing.T) {
+	input := "98, 73\n\n45, 60\n"
+	m, err := ParseNvidiaSmi(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(m.GPUs) != 2 {
+		t.Fatalf("GPUs len = %d, want 2", len(m.GPUs))
+	}
+}
+
+func TestGPUMetricsAvg(t *testing.T) {
+	m := &GPUMetrics{
+		GPUs: []GPUMetric{
+			{Utilization: 80, Temperature: 70},
+			{Utilization: 60, Temperature: 50},
+		},
+	}
+	if avg := m.AvgUtilization(); avg != 70 {
+		t.Errorf("AvgUtilization = %f, want 70", avg)
+	}
+	if avg := m.AvgTemperature(); avg != 60 {
+		t.Errorf("AvgTemperature = %f, want 60", avg)
+	}
+}
+
+func TestGPUMetricsAvgEmpty(t *testing.T) {
+	m := &GPUMetrics{}
+	if avg := m.AvgUtilization(); avg != 0 {
+		t.Errorf("AvgUtilization = %f, want 0", avg)
+	}
+	if avg := m.AvgTemperature(); avg != 0 {
+		t.Errorf("AvgTemperature = %f, want 0", avg)
 	}
 }

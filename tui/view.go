@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"vastproxy/backend"
 	"vastproxy/vast"
 
 	"github.com/charmbracelet/lipgloss"
@@ -45,20 +46,21 @@ type InstanceView struct {
 	State         vast.InstanceState
 	StateSince    time.Time
 	ModelName     string
-	GPUUtil       float64
-	GPUTemp       float64
-	HasSSHMetrics bool // true once we've received GPU data via SSH; prevents API overwrite
+	GPUUtil       float64   // average utilization (used for API fallback display)
+	GPUTemp       float64   // average temperature (used for API fallback display)
+	PerGPU        []backend.GPUMetric // per-GPU metrics from SSH nvidia-smi
+	HasSSHMetrics bool      // true once we've received GPU data via SSH; prevents API overwrite
 }
 
-// RenderInstance renders a 3-line view for a single instance.
+// RenderInstance renders a multi-line view for a single instance.
 func RenderInstance(iv *InstanceView) string {
-	var lines [3]string
+	var lines []string
 
 	// Line 1: #<id> <gpu>x<n>  STATE  duration
 	duration := formatDuration(time.Since(iv.StateSince))
 	stateStr := renderState(iv.State)
-	lines[0] = fmt.Sprintf("  #%d %sx%d  %s  %s",
-		iv.ID, iv.GPUName, iv.NumGPUs, stateStr, stateDim.Render(duration))
+	lines = append(lines, fmt.Sprintf("  #%d %sx%d  %s  %s",
+		iv.ID, iv.GPUName, iv.NumGPUs, stateStr, stateDim.Render(duration)))
 
 	// Line 2: dot + model name
 	dot := unhealthyDot
@@ -69,14 +71,22 @@ func RenderInstance(iv *InstanceView) string {
 	if model == "" {
 		model = "(discovering...)"
 	}
-	lines[1] = fmt.Sprintf("    %s %s", dot, model)
+	lines = append(lines, fmt.Sprintf("    %s %s", dot, model))
 
-	// Line 3: GPU bar
-	lines[2] = fmt.Sprintf("    GPU  %s  %s",
-		renderGPUBar(iv.GPUUtil, 20),
-		renderGPUStats(iv.GPUUtil, iv.GPUTemp))
+	// GPU bars: one per GPU if we have per-GPU data, otherwise a single aggregate bar.
+	if len(iv.PerGPU) > 1 {
+		for i, g := range iv.PerGPU {
+			lines = append(lines, fmt.Sprintf("    GPU%d %s  %s",
+				i, renderGPUBar(g.Utilization, 20),
+				renderGPUStats(g.Utilization, g.Temperature)))
+		}
+	} else {
+		lines = append(lines, fmt.Sprintf("    GPU  %s  %s",
+			renderGPUBar(iv.GPUUtil, 20),
+			renderGPUStats(iv.GPUUtil, iv.GPUTemp)))
+	}
 
-	return strings.Join(lines[:], "\n")
+	return strings.Join(lines, "\n")
 }
 
 func renderState(s vast.InstanceState) string {

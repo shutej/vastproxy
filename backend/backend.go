@@ -250,7 +250,7 @@ func (b *Backend) FetchGPUMetrics() (*GPUMetrics, error) {
 		return nil, fmt.Errorf("no ssh connection")
 	}
 	output, err := b.tunnel.RunCommand(
-		"nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits 2>/dev/null | head -1",
+		"nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits 2>/dev/null",
 	)
 	if err != nil {
 		return nil, err
@@ -347,9 +347,8 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 				if metrics, err := b.FetchGPUMetrics(); err == nil {
 					select {
 					case gpuCh <- GPUUpdate{
-						InstanceID:  b.Instance.ID,
-						Utilization: metrics.Utilization,
-						Temperature: metrics.Temperature,
+						InstanceID: b.Instance.ID,
+						GPUs:       metrics.GPUs,
 					}:
 					default:
 					}
@@ -408,7 +407,6 @@ func (b *Backend) AbortAll(ctx context.Context) error {
 
 // GPUUpdate is sent from a backend's health loop to the TUI.
 type GPUUpdate struct {
-	InstanceID  int
-	Utilization float64
-	Temperature float64
+	InstanceID int
+	GPUs       []GPUMetric // per-GPU utilization and temperature
 }

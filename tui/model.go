@@ -152,8 +152,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case GPUMetricsMsg:
 		if iv, ok := m.instances[msg.InstanceID]; ok {
-			iv.GPUUtil = msg.Utilization
-			iv.GPUTemp = msg.Temperature
+			iv.PerGPU = msg.GPUs
+			// Compute averages for fallback / summary use.
+			if len(msg.GPUs) > 0 {
+				var sumU, sumT float64
+				for _, g := range msg.GPUs {
+					sumU += g.Utilization
+					sumT += g.Temperature
+				}
+				iv.GPUUtil = sumU / float64(len(msg.GPUs))
+				iv.GPUTemp = sumT / float64(len(msg.GPUs))
+			}
 			iv.HasSSHMetrics = true
 		}
 		return m, waitForGPU(m.gpuCh)
