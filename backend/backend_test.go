@@ -18,9 +18,9 @@ func testInstance(id int) *vast.Instance {
 	return &vast.Instance{
 		ID:           id,
 		JupyterToken: "test-token",
-		PublicIPAddr:  "1.2.3.4",
-		SSHHost:       "ssh.example.com",
-		SSHPort:       22,
+		PublicIPAddr: "1.2.3.4",
+		SSHHost:      "ssh.example.com",
+		SSHPort:      22,
 	}
 }
 
@@ -34,11 +34,11 @@ type mockTunnel struct {
 	direct     bool // whether this mock represents a direct SSH connection
 }
 
-func (m *mockTunnel) LocalAddr() string                      { return m.localAddr }
-func (m *mockTunnel) RunCommand(cmd string) (string, error)  { return m.cmdOutput, m.cmdErr }
-func (m *mockTunnel) Close()                                 { m.closedFlag.Store(true) }
-func (m *mockTunnel) IsClosed() bool                         { return m.closedFlag.Load() }
-func (m *mockTunnel) IsDirect() bool                         { return m.direct }
+func (m *mockTunnel) LocalAddr() string                     { return m.localAddr }
+func (m *mockTunnel) RunCommand(cmd string) (string, error) { return m.cmdOutput, m.cmdErr }
+func (m *mockTunnel) Close()                                { m.closedFlag.Store(true) }
+func (m *mockTunnel) IsClosed() bool                        { return m.closedFlag.Load() }
+func (m *mockTunnel) IsDirect() bool                        { return m.direct }
 
 // mockTunnelFactory returns a TunnelFactory that produces the given mock.
 func mockTunnelFactory(t Tunnel, err error) TunnelFactory {

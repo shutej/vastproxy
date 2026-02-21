@@ -38,29 +38,29 @@ func (s InstanceState) String() string {
 
 // Instance represents a vast.ai instance from the API.
 type Instance struct {
-	ID             int              `json:"id"`
-	ActualStatus   string           `json:"actual_status"`
-	PublicIPAddr   string           `json:"public_ipaddr"`
-	SSHHost        string           `json:"ssh_host"`
-	SSHPort        int              `json:"ssh_port"`
-	Ports          map[string][]PortMapping `json:"ports"`
-	GPUName        string           `json:"gpu_name"`
-	NumGPUs        int              `json:"num_gpus"`
-	GPUUtil        *float64         `json:"gpu_util"`
-	GPUTemp        *float64         `json:"gpu_temp"`
-	Label          string           `json:"label"`
-	TemplateHashID string           `json:"template_hash_id"`
-	ExtraEnv       json.RawMessage  `json:"extra_env"`
-	Onstart        string           `json:"onstart"`
-	DirectPortStart  *int            `json:"direct_port_start"`
-	JupyterToken     string           `json:"jupyter_token"`
+	ID              int                      `json:"id"`
+	ActualStatus    string                   `json:"actual_status"`
+	PublicIPAddr    string                   `json:"public_ipaddr"`
+	SSHHost         string                   `json:"ssh_host"`
+	SSHPort         int                      `json:"ssh_port"`
+	Ports           map[string][]PortMapping `json:"ports"`
+	GPUName         string                   `json:"gpu_name"`
+	NumGPUs         int                      `json:"num_gpus"`
+	GPUUtil         *float64                 `json:"gpu_util"`
+	GPUTemp         *float64                 `json:"gpu_temp"`
+	Label           string                   `json:"label"`
+	TemplateHashID  string                   `json:"template_hash_id"`
+	ExtraEnv        json.RawMessage          `json:"extra_env"`
+	Onstart         string                   `json:"onstart"`
+	DirectPortStart *int                     `json:"direct_port_start"`
+	JupyterToken    string                   `json:"jupyter_token"`
 
 	// Computed fields (not from JSON).
-	State          InstanceState    `json:"-"`
-	StateChangedAt time.Time        `json:"-"`
-	ContainerPort  int              `json:"-"`
-	DirectSSHPort  int              `json:"-"`
-	ModelName      string           `json:"-"`
+	State          InstanceState `json:"-"`
+	StateChangedAt time.Time     `json:"-"`
+	ContainerPort  int           `json:"-"`
+	DirectSSHPort  int           `json:"-"`
+	ModelName      string        `json:"-"`
 }
 
 // PortMapping is a single host port mapping entry from the vast.ai API.

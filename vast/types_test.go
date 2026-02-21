@@ -13,14 +13,14 @@ func TestResolveContainerPort(t *testing.T) {
 		want     int
 	}{
 		{
-			name: "from SGLANG_ARGS in extra_env dict",
+			name:     "from SGLANG_ARGS in extra_env dict",
 			extraEnv: json.RawMessage(`{"SGLANG_ARGS":"--port 9000 --model foo"}`),
-			want: 9000,
+			want:     9000,
 		},
 		{
-			name: "from SGLANG_ARGS in extra_env list",
+			name:     "from SGLANG_ARGS in extra_env list",
 			extraEnv: json.RawMessage(`[["SGLANG_ARGS","--port 7777"]]`),
-			want: 7777,
+			want:     7777,
 		},
 		{
 			name:    "from onstart script",
@@ -51,9 +51,9 @@ func TestResolveContainerPort(t *testing.T) {
 
 func TestResolveHostPort(t *testing.T) {
 	tests := []struct {
-		name  string
-		inst  Instance
-		want  int
+		name string
+		inst Instance
+		want int
 	}{
 		{
 			name: "exact container port mapping",

@@ -12,10 +12,10 @@ import (
 
 // Balancer implements round-robin load balancing across healthy backends.
 type Balancer struct {
-	backends    []*backend.Backend
-	counter     atomic.Uint64 // monotonically increasing request counter
-	activeReqs  atomic.Int64  // total in-flight requests across all backends
-	mu          sync.RWMutex
+	backends   []*backend.Backend
+	counter    atomic.Uint64 // monotonically increasing request counter
+	activeReqs atomic.Int64  // total in-flight requests across all backends
+	mu         sync.RWMutex
 }
 
 // NewBalancer creates a new load balancer.

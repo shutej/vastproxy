@@ -23,10 +23,10 @@ type Model struct {
 	startWatcher func() // called once from Init to start the watcher
 	abortFn      func() // called to abort all backend inference
 	started      bool
-	width        int  // terminal width
-	height       int  // terminal height
-	scroll       int  // vertical scroll offset (in lines)
-	confirmAbort bool // true when abort confirmation dialog is showing
+	width        int    // terminal width
+	height       int    // terminal height
+	scroll       int    // vertical scroll offset (in lines)
+	confirmAbort bool   // true when abort confirmation dialog is showing
 	abortStatus  string // transient status message after abort
 }
 

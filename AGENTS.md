@@ -5,7 +5,7 @@
 Run `gofmt` and `go vet` before every commit:
 
 ```sh
-gofmt -l .
+gofmt -w -s .
 go vet ./...
 ```
 

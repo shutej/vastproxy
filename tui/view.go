@@ -15,14 +15,14 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("39"))
 
-	healthyDot  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render("●")
+	healthyDot   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render("●")
 	unhealthyDot = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")).Render("●")
 
-	stateHealthy   = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
-	stateUnhealthy = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	stateHealthy    = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
+	stateUnhealthy  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	stateConnecting = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-	stateRemoving  = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
-	stateDim       = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	stateRemoving   = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
+	stateDim        = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 
 	gpuBarFull  = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
 	gpuBarWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
@@ -46,10 +46,10 @@ type InstanceView struct {
 	State         vast.InstanceState
 	StateSince    time.Time
 	ModelName     string
-	GPUUtil       float64   // average utilization (used for API fallback display)
-	GPUTemp       float64   // average temperature (used for API fallback display)
+	GPUUtil       float64             // average utilization (used for API fallback display)
+	GPUTemp       float64             // average temperature (used for API fallback display)
 	PerGPU        []backend.GPUMetric // per-GPU metrics from SSH nvidia-smi
-	HasSSHMetrics bool      // true once we've received GPU data via SSH; prevents API overwrite
+	HasSSHMetrics bool                // true once we've received GPU data via SSH; prevents API overwrite
 }
 
 // RenderInstance renders a multi-line view for a single instance.
