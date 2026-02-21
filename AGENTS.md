@@ -1,5 +1,18 @@
 # vastproxy — Agent Guidelines
 
+## Formatting & Linting
+
+Run `gofmt` and `go vet` before every commit:
+
+```sh
+gofmt -l .
+go vet ./...
+```
+
+`gofmt -l .` lists files with incorrect formatting. If any are listed, fix them with `gofmt -w .`. All code must be properly formatted before committing.
+
+`go vet ./...` reports suspicious constructs (e.g., unreachable code, incorrect format strings). Fix all warnings before committing.
+
 ## Testing
 
 Run tests before committing:
