@@ -405,6 +405,7 @@ func TestStartHealthLoopTransitionsToHealthy(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.healthInterval = 10 * time.Millisecond
 	mock := &mockTunnel{localAddr: srv.Listener.Addr().String(), cmdOutput: "50, 60"}
 	be.SetTunnelFactory(mockTunnelFactory(mock, nil))
 
@@ -414,12 +415,12 @@ func TestStartHealthLoopTransitionsToHealthy(t *testing.T) {
 	go be.StartHealthLoop(ctx, watcher, gpuCh)
 
 	// Wait for health loop to run at least once.
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for backend to become healthy")
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(10 * time.Millisecond):
 			if be.IsHealthy() {
 				cancel()
 				// Verify watcher got the state update.
@@ -446,6 +447,7 @@ func TestStartHealthLoopGPUMetrics(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.healthInterval = 10 * time.Millisecond
 
 	// Inject a mock tunnel that returns GPU metrics and points at the test server.
 	mock := &mockTunnel{
@@ -476,7 +478,7 @@ func TestStartHealthLoopGPUMetrics(t *testing.T) {
 		if update.GPUs[0].Temperature != 68 {
 			t.Errorf("Temperature = %f, want 68", update.GPUs[0].Temperature)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for GPU update")
 	}
 }
@@ -492,6 +494,7 @@ func TestStartHealthLoopTunnelBreakAndRecover(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.healthInterval = 10 * time.Millisecond
 
 	// Start with a tunnel that points at the server but returns GPU metric errors
 	// (simulating a broken SSH session while health checks still succeed).
@@ -508,12 +511,12 @@ func TestStartHealthLoopTunnelBreakAndRecover(t *testing.T) {
 	go be.StartHealthLoop(ctx, watcher, gpuCh)
 
 	// Wait for health loop to close the broken tunnel.
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for tunnel teardown")
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(10 * time.Millisecond):
 			if brokenMock.IsClosed() {
 				return // Success — tunnel was torn down.
 			}
@@ -534,6 +537,7 @@ func TestStartHealthLoopUnhealthyThenRemoved(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.healthInterval = 10 * time.Millisecond
 	be.SetHealthy(true) // start healthy
 	mock := &mockTunnel{localAddr: srv.Listener.Addr().String()}
 	be.SetTunnel(mock)
@@ -550,12 +554,12 @@ func TestStartHealthLoopUnhealthyThenRemoved(t *testing.T) {
 	}()
 
 	// Wait for backend to become unhealthy (health check fails).
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for backend to become unhealthy")
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(10 * time.Millisecond):
 			if !be.IsHealthy() {
 				goto removeInstance
 			}
@@ -570,7 +574,7 @@ removeInstance:
 	select {
 	case <-done:
 		// Good — loop exited after instance removal.
-	case <-time.After(10 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("StartHealthLoop didn't exit after instance removal")
 	}
 }
@@ -604,35 +608,6 @@ func TestFetchModelBadJSON(t *testing.T) {
 	_, err := be.FetchModel(context.Background())
 	if err == nil {
 		t.Fatal("expected error for invalid JSON response")
-	}
-}
-
-func TestEnsureSSHAuthFailureDoesNotPushKey(t *testing.T) {
-	// SSH key push via API is disabled — verify it stays off.
-	inst := testInstance(1)
-	be := NewBackend(inst, "/nonexistent/key", nil)
-	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("unable to authenticate")))
-
-	be.vastClient = vast.NewClient("test")
-
-	be.EnsureSSH()
-
-	if be.sshKeyPushed {
-		t.Error("sshKeyPushed should be false (SSH key push is disabled)")
-	}
-}
-
-func TestEnsureSSHHandshakeFailureDoesNotPushKey(t *testing.T) {
-	inst := testInstance(1)
-	be := NewBackend(inst, "/nonexistent/key", nil)
-	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("handshake failed")))
-
-	be.vastClient = vast.NewClient("test")
-
-	be.EnsureSSH()
-
-	if be.sshKeyPushed {
-		t.Error("sshKeyPushed should be false (SSH key push is disabled)")
 	}
 }
 
@@ -697,6 +672,7 @@ func TestStartHealthLoopContextCancel(t *testing.T) {
 
 	inst := testInstance(1)
 	be := NewBackend(inst, "", nil)
+	be.healthInterval = 10 * time.Millisecond
 	be.SetTunnelFactory(mockTunnelFactory(nil, fmt.Errorf("no ssh")))
 
 	gpuCh := make(chan GPUUpdate, 10)
@@ -713,7 +689,7 @@ func TestStartHealthLoopContextCancel(t *testing.T) {
 	select {
 	case <-done:
 		// Good — loop exited.
-	case <-time.After(3 * time.Second):
+	case <-time.After(1 * time.Second):
 		t.Fatal("StartHealthLoop didn't exit after context cancel")
 	}
 }

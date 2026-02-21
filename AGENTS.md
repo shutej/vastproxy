@@ -45,7 +45,7 @@ go test -coverprofile=cover.out ./backend/... ./proxy/... ./vast/...
 go tool cover -func=cover.out
 ```
 
-The `backend/ssh.go` functions have low coverage because they require real SSH connections. Everything else should stay above 80%.
+All packages should stay above 80%.
 
 ## Architecture
 

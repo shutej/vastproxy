@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -17,18 +15,18 @@ import (
 // Backend represents a single SGLang backend instance.
 // All HTTP traffic is routed through an SSH tunnel — no direct HTTP to instances.
 type Backend struct {
-	Instance      *vast.Instance
-	baseURL       string // tunnel URL set by CheckHealth (e.g. "http://127.0.0.1:PORT")
-	httpClient    *http.Client
-	tunnel        Tunnel
-	tunnelFactory TunnelFactory // creates tunnels; nil = use NewSSHTunnel
-	activeReqs    atomic.Int64
-	healthy       atomic.Bool
-	keyPath       string
-	vastClient    *vast.Client
-	sshFails      int       // consecutive SSH tunnel creation failures
-	sshBackoffTil time.Time // don't retry SSH until this time
-	sshKeyPushed  bool      // whether we've attempted to attach our SSH key
+	Instance       *vast.Instance
+	baseURL        string // tunnel URL set by CheckHealth (e.g. "http://127.0.0.1:PORT")
+	httpClient     *http.Client
+	tunnel         Tunnel
+	tunnelFactory  TunnelFactory // creates tunnels; nil = use NewSSHTunnel
+	activeReqs     atomic.Int64
+	healthy        atomic.Bool
+	keyPath        string
+	vastClient     *vast.Client
+	healthInterval time.Duration // tick interval for StartHealthLoop; 0 = 5s
+	sshFails       int           // consecutive SSH tunnel creation failures
+	sshBackoffTil  time.Time     // don't retry SSH until this time
 }
 
 // NewBackend creates a backend for the given instance.
@@ -142,17 +140,6 @@ func (b *Backend) EnsureSSH() bool {
 	if err != nil {
 		b.sshFails++
 
-		// NOTE: SSH key push via vast.ai API is disabled — it was returning
-		// 401 and is not needed for request routing (SSH is metrics-only).
-		// To re-enable, uncomment the pushSSHKey block below.
-		//
-		// errStr := err.Error()
-		// if !b.sshKeyPushed && b.vastClient != nil &&
-		// 	(strings.Contains(errStr, "unable to authenticate") ||
-		// 		strings.Contains(errStr, "handshake failed")) {
-		// 	b.pushSSHKey()
-		// }
-
 		// Exponential backoff: 10s, 20s, 40s, ... capped at 5m.
 		wait := min(time.Duration(10<<min(b.sshFails-1, 5))*time.Second, 5*time.Minute)
 		b.sshBackoffTil = time.Now().Add(wait)
@@ -163,44 +150,6 @@ func (b *Backend) EnsureSSH() bool {
 	b.sshFails = 0
 	b.tunnel = tunnel
 	return true
-}
-
-// pushSSHKey reads the public key and attaches it to the instance via the API.
-func (b *Backend) pushSSHKey() {
-	b.sshKeyPushed = true
-
-	keyPath := b.keyPath
-	if keyPath != "" && keyPath[0] == '~' {
-		if home, err := os.UserHomeDir(); err == nil {
-			keyPath = filepath.Join(home, keyPath[1:])
-		}
-	}
-
-	// Try .pub extension first, then the key path itself (in case it IS the pub key).
-	pubPath := keyPath + ".pub"
-	data, err := os.ReadFile(pubPath)
-	if err != nil {
-		data, err = os.ReadFile(keyPath)
-		if err != nil {
-			log.Printf("backend %d: cannot read ssh public key: %v", b.Instance.ID, err)
-			return
-		}
-	}
-
-	pubKey := strings.TrimSpace(string(data))
-	if !strings.HasPrefix(pubKey, "ssh-") && !strings.HasPrefix(pubKey, "ecdsa-") {
-		log.Printf("backend %d: %s doesn't look like a public key, skipping", b.Instance.ID, pubPath)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := b.vastClient.AttachSSHKey(ctx, b.Instance.ID, pubKey); err != nil {
-		log.Printf("backend %d: attach ssh key failed: %v", b.Instance.ID, err)
-	} else {
-		log.Printf("backend %d: attached ssh public key via API", b.Instance.ID)
-	}
 }
 
 func (b *Backend) httpHealthCheck(ctx context.Context, baseURL string) error {
@@ -281,7 +230,11 @@ func (b *Backend) FetchModel(ctx context.Context) (string, error) {
 // StartHealthLoop periodically checks health and fetches GPU metrics.
 // Call in a goroutine.
 func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gpuCh chan<- GPUUpdate) {
-	ticker := time.NewTicker(5 * time.Second)
+	interval := b.healthInterval
+	if interval == 0 {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	wasHealthy := b.healthy.Load()
