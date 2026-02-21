@@ -57,7 +57,9 @@ The `backend/ssh.go` functions have low coverage because they require real SSH c
 
 ## Key Design Decisions
 
-- **Direct HTTP with Bearer auth** for all API traffic (no SSH tunnels for requests). The `jupyter_token` from the vast.ai instances API is the Bearer token for Caddy-proxied ports.
-- **SSH is best-effort** — used only for GPU metrics via `nvidia-smi`. SSH failures don't affect request routing.
+- **SSH is compulsory** — all HTTP traffic is routed through SSH tunnels. There is no direct HTTP to instances. SSH also provides the channel for GPU metrics via `nvidia-smi`. If the tunnel is down, the backend is marked unhealthy and receives no traffic.
+- **Proxy SSH first, direct SSH as fallback.** `NewSSHTunnel` tries the vast.ai proxy endpoint (`sshHost:sshPort`) first because it is more reliable, then falls back to direct SSH (`publicIP:directSSHPort`). The `Tunnel.IsDirect()` method tracks which path was used.
+- **Bearer auth is still used** on the tunneled connection. The `jupyter_token` from the vast.ai instances API is sent as `Authorization: Bearer <token>` on health checks, model queries, abort requests, and proxied client requests. Caddy inside the container still expects it.
+- **Sticky routing** via the `X-VastProxy-Instance` header. The proxy sets it on every response; clients can send it on subsequent requests to pin to a specific backend for KV cache locality (best-effort — falls back to round-robin).
 - **Round-robin load balancing** with an atomic counter. The balancer sorts backends by instance ID for stable ordering.
 - **`httputil.ReverseProxy`** handles all request proxying, including SSE streaming (via `FlushInterval: -1`).
