@@ -118,7 +118,19 @@ func (b *Balancer) ActiveRequests() int64 {
 	return b.activeReqs.Load()
 }
 
-// AbortAll sends abort requests to all healthy backends.
+// HasAbortSupport reports whether any backend supports server-side abort.
+func (b *Balancer) HasAbortSupport() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, be := range b.backends {
+		if be.Instance.Engine.SupportsAbort() {
+			return true
+		}
+	}
+	return false
+}
+
+// AbortAll sends abort requests to all healthy backends that support it.
 func (b *Balancer) AbortAll(ctx context.Context) {
 	b.mu.RLock()
 	backends := make([]*backend.Backend, len(b.backends))

@@ -17,6 +17,11 @@ type StickyPercenter interface {
 	Percent() float64
 }
 
+// AbortChecker reports whether any backend supports server-side abort.
+type AbortChecker interface {
+	HasAbortSupport() bool
+}
+
 // Model is the bubbletea model for the proxy TUI.
 type Model struct {
 	instances      map[int]*InstanceView
@@ -29,6 +34,7 @@ type Model struct {
 	abortFn        func() // called to abort all backend inference
 	destroyFn      func() // called to destroy all vast.ai instances
 	stickyStats    StickyPercenter
+	abortChecker   AbortChecker
 	started        bool
 	width          int    // terminal width
 	height         int    // terminal height
@@ -40,7 +46,7 @@ type Model struct {
 }
 
 // NewModel creates the TUI model.
-func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate, listenAddr string, startWatcher func(), abortFn func(), destroyFn func(), stickyStats StickyPercenter) Model {
+func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate, listenAddr string, startWatcher func(), abortFn func(), destroyFn func(), stickyStats StickyPercenter, abortChecker AbortChecker) Model {
 	return Model{
 		instances:    make(map[int]*InstanceView),
 		eventCh:      eventCh,
@@ -50,6 +56,7 @@ func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate,
 		abortFn:      abortFn,
 		destroyFn:    destroyFn,
 		stickyStats:  stickyStats,
+		abortChecker: abortChecker,
 	}
 }
 
@@ -115,7 +122,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "a":
-			m.confirmAbort = true
+			if m.canAbort() {
+				m.confirmAbort = true
+			}
 			return m, nil
 		case "d":
 			m.confirmDestroy = true
@@ -238,8 +247,10 @@ func (m Model) View() string {
 		footer.WriteString("  " + stateUnhealthy.Render("Abort all backend inference? (y/n)"))
 	} else if m.confirmDestroy {
 		footer.WriteString("  " + stateUnhealthy.Render("DESTROY all vast.ai instances? This is irreversible! (y/n)"))
-	} else {
+	} else if m.canAbort() {
 		footer.WriteString("  Press a to abort all | d to destroy all | q to quit")
+	} else {
+		footer.WriteString("  Press d to destroy all | q to quit")
 	}
 	footerStr := footer.String()
 	footerLines := strings.Count(footerStr, "\n") + 1
@@ -288,6 +299,11 @@ func (m Model) View() string {
 
 func (m *Model) hasID(id int) bool {
 	return slices.Contains(m.order, id)
+}
+
+// canAbort reports whether any backend supports server-side abort.
+func (m *Model) canAbort() bool {
+	return m.abortChecker != nil && m.abortChecker.HasAbortSupport()
 }
 
 // renderGrid lays out cards left-to-right, wrapping when they exceed terminal width.

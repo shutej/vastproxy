@@ -110,7 +110,7 @@ func main() {
 	destroyFn := func() {
 		watcher.DestroyAll(context.Background())
 	}
-	tuiModel := tui.NewModel(tuiEventCh, gpuCh, listenAddr, startWatcher, abortFn, destroyFn, stickyStats)
+	tuiModel := tui.NewModel(tuiEventCh, gpuCh, listenAddr, startWatcher, abortFn, destroyFn, stickyStats, balancer)
 	p := tea.NewProgram(tuiModel, tea.WithAltScreen())
 
 	go func() {

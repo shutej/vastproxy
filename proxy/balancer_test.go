@@ -282,8 +282,8 @@ func TestBalancerAbortAll(t *testing.T) {
 	defer srv.Close()
 
 	bal := NewBalancer()
-	b1 := &vast.Instance{ID: 1, JupyterToken: "tok"}
-	b2 := &vast.Instance{ID: 2, JupyterToken: "tok"}
+	b1 := &vast.Instance{ID: 1, JupyterToken: "tok", Engine: vast.EngineSGLang}
+	b2 := &vast.Instance{ID: 2, JupyterToken: "tok", Engine: vast.EngineSGLang}
 	be1 := backend.NewBackend(b1, "", nil, "")
 	be2 := backend.NewBackend(b2, "", nil, "")
 	be1.SetBaseURL(srv.URL)
@@ -355,8 +355,8 @@ func TestBalancerAbortAllSkipsUnhealthy(t *testing.T) {
 	defer srv.Close()
 
 	bal := NewBalancer()
-	b1 := &vast.Instance{ID: 1, JupyterToken: "tok"}
-	b2 := &vast.Instance{ID: 2, JupyterToken: "tok"}
+	b1 := &vast.Instance{ID: 1, JupyterToken: "tok", Engine: vast.EngineSGLang}
+	b2 := &vast.Instance{ID: 2, JupyterToken: "tok", Engine: vast.EngineSGLang}
 	be1 := backend.NewBackend(b1, "", nil, "")
 	be2 := backend.NewBackend(b2, "", nil, "")
 	be1.SetBaseURL(srv.URL)
@@ -369,5 +369,71 @@ func TestBalancerAbortAllSkipsUnhealthy(t *testing.T) {
 
 	if got := abortCount.Load(); got != 1 {
 		t.Errorf("abort called %d times, want 1 (unhealthy skipped)", got)
+	}
+}
+
+func TestBalancerAbortAllSkipsVLLM(t *testing.T) {
+	var abortCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/abort_request" {
+			abortCount.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	bal := NewBalancer()
+	// SGLang backend — should get aborted.
+	sglangInst := &vast.Instance{ID: 1, JupyterToken: "tok", Engine: vast.EngineSGLang}
+	sglangBe := backend.NewBackend(sglangInst, "", nil, "")
+	sglangBe.SetBaseURL(srv.URL)
+	sglangBe.SetHealthy(true)
+
+	// vLLM backend — should be skipped.
+	vllmInst := &vast.Instance{ID: 2, JupyterToken: "tok", Engine: vast.EngineVLLM}
+	vllmBe := backend.NewBackend(vllmInst, "", nil, "")
+	vllmBe.SetBaseURL(srv.URL)
+	vllmBe.SetHealthy(true)
+
+	bal.SetBackends([]*backend.Backend{sglangBe, vllmBe})
+
+	bal.AbortAll(context.Background())
+
+	if got := abortCount.Load(); got != 1 {
+		t.Errorf("abort called %d times, want 1 (vLLM skipped)", got)
+	}
+}
+
+func TestHasAbortSupport(t *testing.T) {
+	bal := NewBalancer()
+
+	// No backends — no abort support.
+	if bal.HasAbortSupport() {
+		t.Error("HasAbortSupport() = true with no backends, want false")
+	}
+
+	// Only vLLM backends — no abort support.
+	vllmInst := &vast.Instance{ID: 1, Engine: vast.EngineVLLM}
+	vllmBe := backend.NewBackend(vllmInst, "", nil, "")
+	bal.SetBackends([]*backend.Backend{vllmBe})
+	if bal.HasAbortSupport() {
+		t.Error("HasAbortSupport() = true with only vLLM backends, want false")
+	}
+
+	// Mix of SGLang and vLLM — has abort support.
+	sglangInst := &vast.Instance{ID: 2, Engine: vast.EngineSGLang}
+	sglangBe := backend.NewBackend(sglangInst, "", nil, "")
+	bal.SetBackends([]*backend.Backend{vllmBe, sglangBe})
+	if !bal.HasAbortSupport() {
+		t.Error("HasAbortSupport() = false with SGLang backend, want true")
+	}
+
+	// Only unknown engine — no abort support.
+	unknownInst := &vast.Instance{ID: 3, Engine: vast.EngineUnknown}
+	unknownBe := backend.NewBackend(unknownInst, "", nil, "")
+	bal.SetBackends([]*backend.Backend{unknownBe})
+	if bal.HasAbortSupport() {
+		t.Error("HasAbortSupport() = true with only unknown engine, want false")
 	}
 }

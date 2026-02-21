@@ -631,6 +631,7 @@ func TestAbortAll(t *testing.T) {
 	defer srv.Close()
 
 	inst := testInstance(1)
+	inst.Engine = vast.EngineSGLang
 	be := NewBackend(inst, "", nil, "")
 	be.baseURL = srv.URL
 
@@ -655,6 +656,7 @@ func TestAbortAllHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	inst := testInstance(1)
+	inst.Engine = vast.EngineSGLang
 	be := NewBackend(inst, "", nil, "")
 	be.baseURL = srv.URL
 
@@ -666,11 +668,54 @@ func TestAbortAllHTTPError(t *testing.T) {
 
 func TestAbortAllNoBaseURL(t *testing.T) {
 	inst := testInstance(1)
+	inst.Engine = vast.EngineSGLang
 	be := NewBackend(inst, "", nil, "")
 
 	err := be.AbortAll(context.Background())
 	if err == nil {
 		t.Fatal("expected error for empty base URL")
+	}
+}
+
+func TestAbortAllNoOpForVLLM(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	inst := testInstance(1)
+	inst.Engine = vast.EngineVLLM
+	be := NewBackend(inst, "", nil, "")
+	be.baseURL = srv.URL
+
+	if err := be.AbortAll(context.Background()); err != nil {
+		t.Fatalf("AbortAll() error: %v", err)
+	}
+	if called {
+		t.Error("AbortAll should be a no-op for vLLM, but HTTP request was made")
+	}
+}
+
+func TestAbortAllNoOpForUnknownEngine(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	inst := testInstance(1)
+	inst.Engine = vast.EngineUnknown
+	be := NewBackend(inst, "", nil, "")
+	be.baseURL = srv.URL
+
+	if err := be.AbortAll(context.Background()); err != nil {
+		t.Fatalf("AbortAll() error: %v", err)
+	}
+	if called {
+		t.Error("AbortAll should be a no-op for unknown engine, but HTTP request was made")
 	}
 }
 

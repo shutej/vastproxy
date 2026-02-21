@@ -23,6 +23,16 @@ func TestResolveContainerPort(t *testing.T) {
 			want:     7777,
 		},
 		{
+			name:     "from VLLM_ARGS in extra_env dict",
+			extraEnv: json.RawMessage(`{"VLLM_ARGS":"--port 9500 --model foo"}`),
+			want:     9500,
+		},
+		{
+			name:     "from VLLM_ARGS in extra_env list",
+			extraEnv: json.RawMessage(`[["VLLM_ARGS","--port 7000"]]`),
+			want:     7000,
+		},
+		{
 			name:    "from onstart script",
 			onstart: "python -m sglang --port 8888 --model bar",
 			want:    8888,
@@ -32,9 +42,19 @@ func TestResolveContainerPort(t *testing.T) {
 			want: 8000,
 		},
 		{
+			name:     "vllm default 18000",
+			extraEnv: json.RawMessage(`{"VLLM_MODEL":"meta-llama/Llama-3-8B"}`),
+			want:     18000,
+		},
+		{
 			name:     "extra_env takes precedence over onstart",
 			extraEnv: json.RawMessage(`{"SGLANG_ARGS":"--port 9000"}`),
 			onstart:  "python -m sglang --port 8888",
+			want:     9000,
+		},
+		{
+			name:     "SGLANG_ARGS takes precedence over VLLM_ARGS",
+			extraEnv: json.RawMessage(`{"SGLANG_ARGS":"--port 9000","VLLM_ARGS":"--port 7000"}`),
 			want:     9000,
 		},
 	}
@@ -161,5 +181,85 @@ func TestParseExtraEnvEmptyKey(t *testing.T) {
 	got := inst.ParseExtraEnv()
 	if len(got) != 1 {
 		t.Fatalf("got %v, want 1 entry", got)
+	}
+}
+
+func TestResolveEngineType(t *testing.T) {
+	tests := []struct {
+		name     string
+		extraEnv json.RawMessage
+		want     EngineType
+	}{
+		{
+			name:     "sglang from SGLANG_ARGS",
+			extraEnv: json.RawMessage(`{"SGLANG_ARGS":"--port 8000"}`),
+			want:     EngineSGLang,
+		},
+		{
+			name:     "vllm from VLLM_ARGS",
+			extraEnv: json.RawMessage(`{"VLLM_ARGS":"--port 8000"}`),
+			want:     EngineVLLM,
+		},
+		{
+			name:     "vllm from VLLM_MODEL",
+			extraEnv: json.RawMessage(`{"VLLM_MODEL":"meta-llama/Llama-3-8B"}`),
+			want:     EngineVLLM,
+		},
+		{
+			name:     "sglang takes precedence when both present",
+			extraEnv: json.RawMessage(`{"SGLANG_ARGS":"--port 8000","VLLM_ARGS":"--port 9000"}`),
+			want:     EngineSGLang,
+		},
+		{
+			name: "unknown when no engine env vars",
+			want: EngineUnknown,
+		},
+		{
+			name:     "unknown with unrelated env vars",
+			extraEnv: json.RawMessage(`{"FOO":"bar"}`),
+			want:     EngineUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := &Instance{ExtraEnv: tt.extraEnv}
+			if got := inst.ResolveEngineType(); got != tt.want {
+				t.Errorf("ResolveEngineType() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEngineTypeString(t *testing.T) {
+	tests := []struct {
+		engine EngineType
+		want   string
+	}{
+		{EngineSGLang, "sglang"},
+		{EngineVLLM, "vllm"},
+		{EngineUnknown, "unknown"},
+		{EngineType(99), "unknown"},
+	}
+	for _, tt := range tests {
+		if got := tt.engine.String(); got != tt.want {
+			t.Errorf("EngineType(%d).String() = %q, want %q", tt.engine, got, tt.want)
+		}
+	}
+}
+
+func TestEngineTypeSupportsAbort(t *testing.T) {
+	tests := []struct {
+		engine EngineType
+		want   bool
+	}{
+		{EngineSGLang, true},
+		{EngineVLLM, false},
+		{EngineUnknown, false},
+	}
+	for _, tt := range tests {
+		if got := tt.engine.SupportsAbort(); got != tt.want {
+			t.Errorf("EngineType(%d).SupportsAbort() = %v, want %v", tt.engine, got, tt.want)
+		}
 	}
 }

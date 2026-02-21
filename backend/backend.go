@@ -410,8 +410,12 @@ func (b *Backend) Close() {
 }
 
 // AbortAll sends POST /abort_request with empty rid to abort all in-flight
-// inference on this backend. SGLang stops generation for all active requests.
+// inference on this backend. Only SGLang supports a server-side abort endpoint;
+// for other engines this is a no-op.
 func (b *Backend) AbortAll(ctx context.Context) error {
+	if !b.Instance.Engine.SupportsAbort() {
+		return nil
+	}
 	if b.baseURL == "" {
 		return fmt.Errorf("no base URL")
 	}

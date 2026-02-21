@@ -97,10 +97,11 @@ func (w *Watcher) poll(ctx context.Context) {
 			// New instance, or instance returning after removal (e.g. recycling).
 			inst.ContainerPort = inst.ResolveContainerPort()
 			inst.DirectSSHPort = inst.ResolveDirectSSHPort()
+			inst.Engine = inst.ResolveEngineType()
 			inst.State = StateDiscovered
 			inst.StateChangedAt = time.Now()
-			log.Printf("vast watcher: new instance %d: publicIP=%s containerPort=%d directSSH=%d ssh=%s:%d",
-				inst.ID, inst.PublicIPAddr, inst.ContainerPort, inst.DirectSSHPort, inst.SSHHost, inst.SSHPort)
+			log.Printf("vast watcher: new instance %d: publicIP=%s containerPort=%d directSSH=%d ssh=%s:%d engine=%s",
+				inst.ID, inst.PublicIPAddr, inst.ContainerPort, inst.DirectSSHPort, inst.SSHHost, inst.SSHPort, inst.Engine)
 			w.instances[inst.ID] = inst
 			w.emit(InstanceEvent{Type: "added", Instance: inst})
 		} else {

@@ -61,6 +61,7 @@ type Instance struct {
 	ContainerPort  int           `json:"-"`
 	DirectSSHPort  int           `json:"-"`
 	ModelName      string        `json:"-"`
+	Engine         EngineType    `json:"-"`
 }
 
 // PortMapping is a single host port mapping entry from the vast.ai API.
@@ -74,13 +75,65 @@ type InstancesResponse struct {
 	Instances []Instance `json:"instances"`
 }
 
+// EngineType identifies the inference engine running on an instance.
+type EngineType int
+
+const (
+	EngineUnknown EngineType = iota // zero value; no engine-specific env vars found
+	EngineSGLang                    // detected via SGLANG_ARGS
+	EngineVLLM                      // detected via VLLM_ARGS or VLLM_MODEL
+)
+
+func (e EngineType) String() string {
+	switch e {
+	case EngineSGLang:
+		return "sglang"
+	case EngineVLLM:
+		return "vllm"
+	default:
+		return "unknown"
+	}
+}
+
+// SupportsAbort reports whether the engine has a server-side abort endpoint.
+func (e EngineType) SupportsAbort() bool {
+	return e == EngineSGLang
+}
+
 var portRe = regexp.MustCompile(`--port\s+(\d+)`)
 
-// ResolveContainerPort determines the SGLang container port from instance config.
-func (inst *Instance) ResolveContainerPort() int {
-	// Check extra_env for SGLANG_ARGS --port
+// ResolveEngineType detects the inference engine from instance environment variables.
+func (inst *Instance) ResolveEngineType() EngineType {
 	env := inst.ParseExtraEnv()
+	if _, ok := env["SGLANG_ARGS"]; ok {
+		return EngineSGLang
+	}
+	if _, ok := env["VLLM_ARGS"]; ok {
+		return EngineVLLM
+	}
+	if _, ok := env["VLLM_MODEL"]; ok {
+		return EngineVLLM
+	}
+	return EngineUnknown
+}
+
+// ResolveContainerPort determines the container port from instance config.
+// For SGLang, checks SGLANG_ARGS; for vLLM, checks VLLM_ARGS.
+// Falls back to the onstart script, then engine-specific defaults
+// (18000 for vLLM, 8000 otherwise).
+func (inst *Instance) ResolveContainerPort() int {
+	env := inst.ParseExtraEnv()
+
+	// Check SGLANG_ARGS for --port
 	if args, ok := env["SGLANG_ARGS"]; ok {
+		if m := portRe.FindStringSubmatch(args); m != nil {
+			if p, err := strconv.Atoi(m[1]); err == nil {
+				return p
+			}
+		}
+	}
+	// Check VLLM_ARGS for --port
+	if args, ok := env["VLLM_ARGS"]; ok {
 		if m := portRe.FindStringSubmatch(args); m != nil {
 			if p, err := strconv.Atoi(m[1]); err == nil {
 				return p
@@ -92,6 +145,10 @@ func (inst *Instance) ResolveContainerPort() int {
 		if p, err := strconv.Atoi(m[1]); err == nil {
 			return p
 		}
+	}
+	// vLLM base image uses 18000 internally by default.
+	if inst.ResolveEngineType() == EngineVLLM {
+		return 18000
 	}
 	return 8000
 }
