@@ -9,7 +9,8 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
-	"vastproxy/backend"
+
+	"github.com/shutej/vastproxy/backend"
 )
 
 // StickyHeader is the HTTP header used to pin requests to a specific backend instance.

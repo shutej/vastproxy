@@ -2,8 +2,9 @@ package tui
 
 import (
 	"time"
-	"vastproxy/backend"
-	"vastproxy/vast"
+
+	"github.com/shutej/vastproxy/backend"
+	"github.com/shutej/vastproxy/vast"
 )
 
 // InstanceAddedMsg is sent when a new instance is discovered.

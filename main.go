@@ -9,13 +9,13 @@ import (
 	"os/signal"
 	"sync"
 	"time"
-	"vastproxy/backend"
-	"vastproxy/proxy"
-	"vastproxy/tui"
-	"vastproxy/vast"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joho/godotenv"
+	"github.com/shutej/vastproxy/backend"
+	"github.com/shutej/vastproxy/proxy"
+	"github.com/shutej/vastproxy/tui"
+	"github.com/shutej/vastproxy/vast"
 )
 
 func main() {

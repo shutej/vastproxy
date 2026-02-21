@@ -11,7 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"vastproxy/vast"
+
+	"github.com/shutej/vastproxy/vast"
 )
 
 func testInstance(id int) *vast.Instance {

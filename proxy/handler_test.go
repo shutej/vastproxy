@@ -8,8 +8,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"vastproxy/backend"
-	"vastproxy/vast"
+
+	"github.com/shutej/vastproxy/backend"
+	"github.com/shutej/vastproxy/vast"
 )
 
 // fakeBackendServer creates an httptest.Server that echoes request info back.

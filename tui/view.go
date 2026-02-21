@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"vastproxy/backend"
-	"vastproxy/vast"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/shutej/vastproxy/backend"
+	"github.com/shutej/vastproxy/vast"
 )
 
 var (

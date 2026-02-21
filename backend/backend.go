@@ -9,7 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"vastproxy/vast"
+
+	"github.com/shutej/vastproxy/vast"
 )
 
 // Backend represents a single SGLang backend instance.

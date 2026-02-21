@@ -7,8 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"vastproxy/backend"
-	"vastproxy/vast"
+
+	"github.com/shutej/vastproxy/backend"
+	"github.com/shutej/vastproxy/vast"
 )
 
 func makeBackend(id int, healthy bool) *backend.Backend {

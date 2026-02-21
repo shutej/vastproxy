@@ -7,7 +7,8 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"vastproxy/backend"
+
+	"github.com/shutej/vastproxy/backend"
 )
 
 // Balancer implements round-robin load balancing across healthy backends.

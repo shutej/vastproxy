@@ -5,11 +5,11 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"vastproxy/backend"
-	"vastproxy/vast"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/shutej/vastproxy/backend"
+	"github.com/shutej/vastproxy/vast"
 )
 
 // StickyPercenter returns the sticky-request percentage for display.
