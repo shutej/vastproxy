@@ -355,6 +355,131 @@ func TestReverseProxyConcurrentRoundRobin(t *testing.T) {
 	}
 }
 
+func TestReverseProxyStickyHeaderInResponse(t *testing.T) {
+	backendSrv := fakeBackendServer(t)
+	defer backendSrv.Close()
+
+	inst := &vast.Instance{ID: 42, JupyterToken: "tok"}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL(backendSrv.URL + "/v1")
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+	handler := NewReverseProxy(bal)
+
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	got := rec.Header().Get(StickyHeader)
+	if got != "42" {
+		t.Errorf("response %s = %q, want %q", StickyHeader, got, "42")
+	}
+}
+
+func TestReverseProxyStickyRouting(t *testing.T) {
+	// Create 3 backends, each echoing their instance ID.
+	servers := make([]*httptest.Server, 3)
+	for i := range 3 {
+		id := i + 1
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Backend-ID", fmt.Sprintf("%d", id))
+			fmt.Fprintf(w, `{"backend":%d}`, id)
+		}))
+		defer servers[i].Close()
+	}
+
+	backends := make([]*backend.Backend, 3)
+	for i, srv := range servers {
+		inst := &vast.Instance{ID: i + 1}
+		backends[i] = backend.NewBackend(inst, "", nil)
+		backends[i].SetBaseURL(srv.URL + "/v1")
+		backends[i].SetHealthy(true)
+	}
+
+	bal := NewBalancer()
+	bal.SetBackends(backends)
+	handler := NewReverseProxy(bal)
+
+	// Send 10 requests all pinned to instance 2.
+	for range 10 {
+		req := httptest.NewRequest("GET", "/v1/models", nil)
+		req.Header.Set(StickyHeader, "2")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		got := rec.Header().Get("X-Backend-ID")
+		if got != "2" {
+			t.Errorf("sticky request hit backend %s, want 2", got)
+		}
+		sticky := rec.Header().Get(StickyHeader)
+		if sticky != "2" {
+			t.Errorf("response %s = %q, want %q", StickyHeader, sticky, "2")
+		}
+	}
+}
+
+func TestReverseProxyStickyFallback(t *testing.T) {
+	backendSrv := fakeBackendServer(t)
+	defer backendSrv.Close()
+
+	inst := &vast.Instance{ID: 1, JupyterToken: "tok"}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL(backendSrv.URL + "/v1")
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+	handler := NewReverseProxy(bal)
+
+	// Request a nonexistent instance — should fall back to round-robin.
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set(StickyHeader, "999")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (fallback)", rec.Code)
+	}
+	// Should report the actual instance that served it.
+	got := rec.Header().Get(StickyHeader)
+	if got != "1" {
+		t.Errorf("response %s = %q, want %q", StickyHeader, got, "1")
+	}
+}
+
+func TestReverseProxyStickyHeaderNotForwarded(t *testing.T) {
+	// Verify that X-VastProxy-Instance is stripped before reaching the backend.
+	var gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get(StickyHeader)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	inst := &vast.Instance{ID: 5}
+	be := backend.NewBackend(inst, "", nil)
+	be.SetBaseURL(srv.URL + "/v1")
+	be.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{be})
+	handler := NewReverseProxy(bal)
+
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set(StickyHeader, "5")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if gotHeader != "" {
+		t.Errorf("backend received %s = %q, want empty (should be stripped)", StickyHeader, gotHeader)
+	}
+}
+
 func TestReverseProxyBadBackendURL(t *testing.T) {
 	// Backend with an unparseable URL should return 500.
 	inst := &vast.Instance{ID: 1}

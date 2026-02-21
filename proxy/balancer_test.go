@@ -298,6 +298,50 @@ func TestBalancerAbortAll(t *testing.T) {
 	}
 }
 
+func TestPickByIDHealthy(t *testing.T) {
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{
+		makeBackend(10, true),
+		makeBackend(20, true),
+		makeBackend(30, true),
+	})
+
+	be, err := bal.PickByID(20)
+	if err != nil {
+		t.Fatalf("PickByID(20) error: %v", err)
+	}
+	if be.Instance.ID != 20 {
+		t.Errorf("PickByID(20) got ID %d, want 20", be.Instance.ID)
+	}
+}
+
+func TestPickByIDUnhealthy(t *testing.T) {
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{
+		makeBackend(10, true),
+		makeBackend(20, false),
+		makeBackend(30, true),
+	})
+
+	_, err := bal.PickByID(20)
+	if err != ErrNoBackends {
+		t.Errorf("PickByID(20) err = %v, want ErrNoBackends", err)
+	}
+}
+
+func TestPickByIDNotFound(t *testing.T) {
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{
+		makeBackend(10, true),
+		makeBackend(20, true),
+	})
+
+	_, err := bal.PickByID(99)
+	if err != ErrNoBackends {
+		t.Errorf("PickByID(99) err = %v, want ErrNoBackends", err)
+	}
+}
+
 func TestBalancerAbortAllSkipsUnhealthy(t *testing.T) {
 	var abortCount atomic.Int32
 

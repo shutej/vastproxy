@@ -6,10 +6,17 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+	"vastproxy/backend"
 )
+
+// StickyHeader is the HTTP header used to pin requests to a specific backend instance.
+// The proxy sets it on every response; clients can send it on subsequent requests
+// to route to the same instance (best-effort — falls back to round-robin).
+const StickyHeader = "X-VastProxy-Instance"
 
 // statusRecorder wraps http.ResponseWriter to capture the status code and
 // count bytes written, for request logging.
@@ -47,12 +54,26 @@ func NewReverseProxy(balancer *Balancer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		be, err := balancer.Pick()
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(`{"error":{"message":"no backends available","type":"server_error"}}`))
-			return
+		// Sticky routing: if the client sends X-VastProxy-Instance, try
+		// to route to that specific backend for KV cache locality.
+		var be *backend.Backend
+		if raw := r.Header.Get(StickyHeader); raw != "" {
+			if id, err := strconv.Atoi(raw); err == nil {
+				be, _ = balancer.PickByID(id)
+				if be != nil {
+					log.Printf("proxy: sticky route to instance %d", id)
+				}
+			}
+		}
+		if be == nil {
+			var err error
+			be, err = balancer.Pick()
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte(`{"error":{"message":"no backends available","type":"server_error"}}`))
+				return
+			}
 		}
 		be.Acquire()
 		balancer.Acquire()
@@ -102,9 +123,13 @@ func NewReverseProxy(balancer *Balancer) http.Handler {
 				if tok := be.Token(); tok != "" {
 					req.Header.Set("Authorization", "Bearer "+tok)
 				}
+
+				// Strip the sticky header — it's proxy-internal.
+				req.Header.Del(StickyHeader)
 			},
 			ModifyResponse: func(resp *http.Response) error {
 				upstreamStatus.Store(int32(resp.StatusCode))
+				resp.Header.Set(StickyHeader, strconv.Itoa(be.Instance.ID))
 				return nil
 			},
 			Transport: be.HTTPClient().Transport,

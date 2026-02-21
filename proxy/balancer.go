@@ -69,6 +69,19 @@ func (b *Balancer) Pick() (*backend.Backend, error) {
 	return pick, nil
 }
 
+// PickByID selects a specific backend by instance ID.
+// Returns ErrNoBackends if the instance doesn't exist or isn't healthy.
+func (b *Balancer) PickByID(id int) (*backend.Backend, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, be := range b.backends {
+		if be.Instance.ID == id && be.IsHealthy() {
+			return be, nil
+		}
+	}
+	return nil, ErrNoBackends
+}
+
 // HealthyCount returns the number of healthy backends.
 func (b *Balancer) HealthyCount() int {
 	b.mu.RLock()
