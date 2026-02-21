@@ -236,7 +236,7 @@ func TestSSHTunnelRunCommandNoClient(t *testing.T) {
 
 func TestSetBaseURL(t *testing.T) {
 	inst := testInstance(1)
-	be := NewBackend(inst, "", nil)
+	be := NewBackend(inst, "", nil, "")
 	be.SetBaseURL("http://127.0.0.1:9999/v1")
 	if got := be.BaseURL(); got != "http://127.0.0.1:9999/v1" {
 		t.Errorf("BaseURL() = %q after SetBaseURL", got)

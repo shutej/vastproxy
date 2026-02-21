@@ -104,10 +104,11 @@ func (w *Watcher) poll(ctx context.Context) {
 			w.instances[inst.ID] = inst
 			w.emit(InstanceEvent{Type: "added", Instance: inst})
 		} else {
-			// Update mutable fields (GPU metrics, status).
+			// Update mutable fields (GPU metrics, status, label).
 			existing.GPUUtil = inst.GPUUtil
 			existing.GPUTemp = inst.GPUTemp
 			existing.ActualStatus = inst.ActualStatus
+			existing.Label = inst.Label
 			w.emit(InstanceEvent{Type: "updated", Instance: existing})
 		}
 	}

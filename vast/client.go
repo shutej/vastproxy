@@ -56,6 +56,35 @@ func (c *Client) ListInstances(ctx context.Context) ([]Instance, error) {
 	return result.Instances, nil
 }
 
+// SetBaseURL overrides the API base URL (used in tests).
+func (c *Client) SetBaseURL(url string) {
+	c.baseURL = url
+}
+
+// SetLabel sets the label on an instance via PUT /api/v0/instances/{id}/.
+func (c *Client) SetLabel(ctx context.Context, instanceID int, label string) error {
+	body, _ := json.Marshal(map[string]string{"label": label})
+	url := fmt.Sprintf("%s/instances/%d/", c.baseURL, instanceID)
+	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("set label returned HTTP %d: %s", resp.StatusCode, body)
+	}
+	return nil
+}
+
 // AttachSSHKey attaches a public SSH key to an instance.
 func (c *Client) AttachSSHKey(ctx context.Context, instanceID int, publicKey string) error {
 	body, _ := json.Marshal(map[string]string{"ssh_key": publicKey})

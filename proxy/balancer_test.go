@@ -13,7 +13,7 @@ import (
 
 func makeBackend(id int, healthy bool) *backend.Backend {
 	inst := &vast.Instance{ID: id, JupyterToken: "tok"}
-	be := backend.NewBackend(inst, "", nil)
+	be := backend.NewBackend(inst, "", nil, "")
 	be.SetBaseURL("http://localhost")
 	if healthy {
 		be.SetHealthy(true)
@@ -283,8 +283,8 @@ func TestBalancerAbortAll(t *testing.T) {
 	bal := NewBalancer()
 	b1 := &vast.Instance{ID: 1, JupyterToken: "tok"}
 	b2 := &vast.Instance{ID: 2, JupyterToken: "tok"}
-	be1 := backend.NewBackend(b1, "", nil)
-	be2 := backend.NewBackend(b2, "", nil)
+	be1 := backend.NewBackend(b1, "", nil, "")
+	be2 := backend.NewBackend(b2, "", nil, "")
 	be1.SetBaseURL(srv.URL)
 	be2.SetBaseURL(srv.URL)
 	be1.SetHealthy(true)
@@ -356,8 +356,8 @@ func TestBalancerAbortAllSkipsUnhealthy(t *testing.T) {
 	bal := NewBalancer()
 	b1 := &vast.Instance{ID: 1, JupyterToken: "tok"}
 	b2 := &vast.Instance{ID: 2, JupyterToken: "tok"}
-	be1 := backend.NewBackend(b1, "", nil)
-	be2 := backend.NewBackend(b2, "", nil)
+	be1 := backend.NewBackend(b1, "", nil, "")
+	be2 := backend.NewBackend(b2, "", nil, "")
 	be1.SetBaseURL(srv.URL)
 	be2.SetBaseURL(srv.URL)
 	be1.SetHealthy(true)

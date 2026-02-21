@@ -171,6 +171,77 @@ func TestDestroyInstanceNetworkError(t *testing.T) {
 	}
 }
 
+func TestSetLabel(t *testing.T) {
+	var gotMethod string
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		if r.URL.Path != "/instances/42/" {
+			t.Errorf("path = %s, want /instances/42/", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Errorf("Authorization = %q", got)
+		}
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newTestClient("test-key", srv.URL)
+	err := c.SetLabel(context.Background(), 42, "proxied")
+	if err != nil {
+		t.Fatalf("SetLabel() error: %v", err)
+	}
+	if gotMethod != "PUT" {
+		t.Errorf("method = %s, want PUT", gotMethod)
+	}
+	if gotBody["label"] != "proxied" {
+		t.Errorf("label = %q, want proxied", gotBody["label"])
+	}
+}
+
+func TestSetLabelClear(t *testing.T) {
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newTestClient("key", srv.URL)
+	err := c.SetLabel(context.Background(), 1, "")
+	if err != nil {
+		t.Fatalf("SetLabel() error: %v", err)
+	}
+	if gotBody["label"] != "" {
+		t.Errorf("label = %q, want empty", gotBody["label"])
+	}
+}
+
+func TestSetLabelHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c := newTestClient("key", srv.URL)
+	err := c.SetLabel(context.Background(), 1, "proxied")
+	if err == nil {
+		t.Fatal("expected error for 403 response")
+	}
+}
+
+func TestSetLabelNetworkError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close()
+
+	c := newTestClient("key", srv.URL)
+	err := c.SetLabel(context.Background(), 1, "proxied")
+	if err == nil {
+		t.Fatal("expected error for closed server")
+	}
+}
+
 // newTestClient creates a Client pointing at a test server instead of the real API.
 func newTestClient(apiKey, baseURL string) *Client {
 	c := NewClient(apiKey)

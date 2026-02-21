@@ -28,10 +28,12 @@ type Backend struct {
 	sshFails           int           // consecutive SSH tunnel creation failures
 	sshBackoffTil      time.Time     // don't retry SSH until this time
 	lastUpgradeAttempt time.Time     // last time we tried to upgrade proxy→direct SSH
+	label              string        // managed label value; empty = labeling disabled
 }
 
 // NewBackend creates a backend for the given instance.
-func NewBackend(inst *vast.Instance, keyPath string, vastClient *vast.Client) *Backend {
+// label is the vast.ai label to apply when healthy; empty disables labeling.
+func NewBackend(inst *vast.Instance, keyPath string, vastClient *vast.Client, label string) *Backend {
 	return &Backend{
 		Instance: inst,
 		httpClient: &http.Client{
@@ -39,6 +41,7 @@ func NewBackend(inst *vast.Instance, keyPath string, vastClient *vast.Client) *B
 		},
 		keyPath:    keyPath,
 		vastClient: vastClient,
+		label:      label,
 	}
 }
 
@@ -261,6 +264,7 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 
 				if wasHealthy {
 					watcher.SetInstanceState(b.Instance.ID, vast.StateUnhealthy)
+					go b.clearLabelIfOurs(ctx)
 					wasHealthy = false
 				}
 
@@ -276,6 +280,7 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 				log.Printf("backend %d: now healthy", b.Instance.ID)
 				watcher.SetInstanceState(b.Instance.ID, vast.StateHealthy)
 				wasHealthy = true
+				go b.setLabel(ctx, b.label)
 			}
 
 			// Discover model name if not yet known.
@@ -355,8 +360,47 @@ func (b *Backend) tryUpgradeToDirect(ctx context.Context) {
 	log.Printf("backend %d: upgraded to direct SSH", inst.ID)
 }
 
+// ApplyLabel sets the managed label on the instance (best-effort).
+// Called from main after initial health check succeeds.
+func (b *Backend) ApplyLabel(ctx context.Context) {
+	go b.setLabel(ctx, b.label)
+}
+
+// setLabel sets the instance label via the vast.ai API (best-effort, logged).
+func (b *Backend) setLabel(ctx context.Context, label string) {
+	if b.label == "" || b.vastClient == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := b.vastClient.SetLabel(ctx, b.Instance.ID, label); err != nil {
+		log.Printf("backend %d: set label %q: %v", b.Instance.ID, label, err)
+	} else {
+		log.Printf("backend %d: label set to %q", b.Instance.ID, label)
+		b.Instance.Label = label
+	}
+}
+
+// clearLabelIfOurs clears the label only if it matches the managed label,
+// to avoid overwriting labels set by the user externally.
+func (b *Backend) clearLabelIfOurs(ctx context.Context) {
+	if b.label == "" || b.vastClient == nil {
+		return
+	}
+	if b.Instance.Label != b.label {
+		return
+	}
+	b.setLabel(ctx, "")
+}
+
 // Close shuts down the backend and SSH tunnel.
 func (b *Backend) Close() {
+	// Best-effort: clear our label before tearing down.
+	if b.label != "" && b.vastClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		b.clearLabelIfOurs(ctx)
+		cancel()
+	}
 	b.healthy.Store(false)
 	if b.tunnel != nil {
 		b.tunnel.Close()

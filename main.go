@@ -45,6 +45,14 @@ func main() {
 		listenAddr = ":8080"
 	}
 
+	proxyLabel := os.Getenv("VASTPROXY_LABEL")
+	if proxyLabel == "" {
+		proxyLabel = "proxied"
+	}
+	if proxyLabel == "none" {
+		proxyLabel = ""
+	}
+
 	// Create vast.ai watcher.
 	vastClient := vast.NewClient(apiKey)
 	watcher := vast.NewWatcher(vastClient, 10*time.Second)
@@ -81,7 +89,7 @@ func main() {
 
 	// Start backend manager (reads from mgrEventCh).
 	// Started before watcher so it's ready to receive events.
-	go manageBackends(ctx, watcher, vastClient, mgrEventCh, balancer, gpuCh, keyPath)
+	go manageBackends(ctx, watcher, vastClient, mgrEventCh, balancer, gpuCh, keyPath, proxyLabel)
 
 	// Start HTTP server.
 	go func() {
@@ -124,7 +132,7 @@ func main() {
 }
 
 // manageBackends bridges watcher events to backend creation/removal.
-func manageBackends(ctx context.Context, watcher *vast.Watcher, vastClient *vast.Client, eventCh <-chan vast.InstanceEvent, bal *proxy.Balancer, gpuCh chan<- backend.GPUUpdate, keyPath string) {
+func manageBackends(ctx context.Context, watcher *vast.Watcher, vastClient *vast.Client, eventCh <-chan vast.InstanceEvent, bal *proxy.Balancer, gpuCh chan<- backend.GPUUpdate, keyPath string, proxyLabel string) {
 	backends := make(map[int]*backend.Backend)
 	cancels := make(map[int]context.CancelFunc)
 	var mu sync.Mutex
@@ -161,7 +169,7 @@ func manageBackends(ctx context.Context, watcher *vast.Watcher, vastClient *vast
 			case "added":
 				inst := evt.Instance
 				log.Printf("backend manager: adding instance %d (%s)", inst.ID, inst.DisplayName())
-				be := backend.NewBackend(inst, keyPath, vastClient)
+				be := backend.NewBackend(inst, keyPath, vastClient, proxyLabel)
 				beCtx, beCancel := context.WithCancel(ctx)
 
 				mu.Lock()
@@ -188,6 +196,7 @@ func manageBackends(ctx context.Context, watcher *vast.Watcher, vastClient *vast
 					} else {
 						log.Printf("backend %d: healthy", inst.ID)
 						watcher.SetInstanceState(inst.ID, vast.StateHealthy)
+						be.ApplyLabel(beCtx)
 					}
 
 					// Discover model name.
