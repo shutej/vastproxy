@@ -164,6 +164,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				iv.GPUTemp = sumT / float64(len(msg.GPUs))
 			}
 			iv.HasSSHMetrics = true
+			iv.SSHDirect = msg.IsDirect
 		}
 		return m, waitForGPU(m.gpuCh)
 

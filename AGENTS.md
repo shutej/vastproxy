@@ -58,7 +58,7 @@ All packages should stay above 80%.
 ## Key Design Decisions
 
 - **SSH is compulsory** — all HTTP traffic is routed through SSH tunnels. There is no direct HTTP to instances. SSH also provides the channel for GPU metrics via `nvidia-smi`. If the tunnel is down, the backend is marked unhealthy and receives no traffic.
-- **Proxy SSH first, direct SSH as fallback.** `NewSSHTunnel` tries the vast.ai proxy endpoint (`sshHost:sshPort`) first because it is more reliable, then falls back to direct SSH (`publicIP:directSSHPort`). The `Tunnel.IsDirect()` method tracks which path was used.
+- **Direct SSH first, proxy SSH as fallback.** `NewSSHTunnel` tries direct SSH (`publicIP:directSSHPort`) first for lower latency, then falls back to the vast.ai proxy endpoint (`sshHost:sshPort`). The health loop periodically attempts to upgrade proxy connections to direct ones. The `Tunnel.IsDirect()` method tracks which path was used, and the TUI shows a green rabbit (direct) or red turtle (proxied) icon.
 - **Bearer auth is still used** on the tunneled connection. The `jupyter_token` from the vast.ai instances API is sent as `Authorization: Bearer <token>` on health checks, model queries, abort requests, and proxied client requests. Caddy inside the container still expects it.
 - **Sticky routing** via the `X-VastProxy-Instance` header. The proxy sets it on every response; clients can send it on subsequent requests to pin to a specific backend for KV cache locality (best-effort — falls back to round-robin).
 - **Round-robin load balancing** with an atomic counter. The balancer sorts backends by instance ID for stable ordering.

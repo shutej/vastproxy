@@ -15,18 +15,19 @@ import (
 // Backend represents a single SGLang backend instance.
 // All HTTP traffic is routed through an SSH tunnel — no direct HTTP to instances.
 type Backend struct {
-	Instance       *vast.Instance
-	baseURL        string // tunnel URL set by CheckHealth (e.g. "http://127.0.0.1:PORT")
-	httpClient     *http.Client
-	tunnel         Tunnel
-	tunnelFactory  TunnelFactory // creates tunnels; nil = use NewSSHTunnel
-	activeReqs     atomic.Int64
-	healthy        atomic.Bool
-	keyPath        string
-	vastClient     *vast.Client
-	healthInterval time.Duration // tick interval for StartHealthLoop; 0 = 5s
-	sshFails       int           // consecutive SSH tunnel creation failures
-	sshBackoffTil  time.Time     // don't retry SSH until this time
+	Instance           *vast.Instance
+	baseURL            string // tunnel URL set by CheckHealth (e.g. "http://127.0.0.1:PORT")
+	httpClient         *http.Client
+	tunnel             Tunnel
+	tunnelFactory      TunnelFactory // creates tunnels; nil = use NewSSHTunnel
+	activeReqs         atomic.Int64
+	healthy            atomic.Bool
+	keyPath            string
+	vastClient         *vast.Client
+	healthInterval     time.Duration // tick interval for StartHealthLoop; 0 = 5s
+	sshFails           int           // consecutive SSH tunnel creation failures
+	sshBackoffTil      time.Time     // don't retry SSH until this time
+	lastUpgradeAttempt time.Time     // last time we tried to upgrade proxy→direct SSH
 }
 
 // NewBackend creates a backend for the given instance.
@@ -94,6 +95,14 @@ func (b *Backend) SetTunnel(t Tunnel) {
 // SetTunnelFactory injects a tunnel factory (used in tests).
 func (b *Backend) SetTunnelFactory(f TunnelFactory) {
 	b.tunnelFactory = f
+}
+
+// IsDirect returns true if the current SSH tunnel is a direct connection.
+func (b *Backend) IsDirect() bool {
+	if b.tunnel == nil {
+		return false
+	}
+	return b.tunnel.IsDirect()
 }
 
 // CheckHealth verifies connectivity to the backend via the SSH tunnel.
@@ -277,6 +286,9 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 				}
 			}
 
+			// Attempt to upgrade proxy→direct SSH every 30s.
+			b.tryUpgradeToDirect(ctx)
+
 			// Fetch GPU metrics via SSH.
 			if b.tunnel != nil {
 				if metrics, err := b.FetchGPUMetrics(); err == nil {
@@ -284,6 +296,7 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 					case gpuCh <- GPUUpdate{
 						InstanceID: b.Instance.ID,
 						GPUs:       metrics.GPUs,
+						IsDirect:   b.tunnel.IsDirect(),
 					}:
 					default:
 					}
@@ -295,6 +308,51 @@ func (b *Backend) StartHealthLoop(ctx context.Context, watcher *vast.Watcher, gp
 			}
 		}
 	}
+}
+
+// tryUpgradeToDirect attempts to promote a proxy SSH tunnel to a direct one.
+// It only runs if the current tunnel is indirect and at least 30s have passed
+// since the last attempt. On success it swaps tunnels seamlessly; on failure
+// the existing proxy tunnel keeps running.
+func (b *Backend) tryUpgradeToDirect(ctx context.Context) {
+	if b.tunnel == nil || b.tunnel.IsDirect() {
+		return
+	}
+	if time.Since(b.lastUpgradeAttempt) < 30*time.Second {
+		return
+	}
+	b.lastUpgradeAttempt = time.Now()
+
+	inst := b.Instance
+	if inst.PublicIPAddr == "" || inst.DirectSSHPort == 0 {
+		return
+	}
+
+	// Try to create a direct-only tunnel (empty sshHost disables proxy fallback).
+	factory := b.tunnelFactory
+	if factory == nil {
+		factory = NewSSHTunnel
+	}
+	directTunnel, err := factory(inst.PublicIPAddr, inst.DirectSSHPort, "", 0, b.keyPath, inst.ContainerPort)
+	if err != nil {
+		log.Printf("backend %d: direct SSH upgrade failed: %v", inst.ID, err)
+		return
+	}
+
+	// Verify the new tunnel is healthy before swapping.
+	tunnelURL := fmt.Sprintf("http://%s", directTunnel.LocalAddr())
+	if err := b.httpHealthCheck(ctx, tunnelURL); err != nil {
+		log.Printf("backend %d: direct SSH upgrade health check failed: %v", inst.ID, err)
+		directTunnel.Close()
+		return
+	}
+
+	// Swap: close old proxy tunnel, install new direct tunnel.
+	old := b.tunnel
+	b.tunnel = directTunnel
+	b.baseURL = tunnelURL
+	old.Close()
+	log.Printf("backend %d: upgraded to direct SSH", inst.ID)
 }
 
 // Close shuts down the backend and SSH tunnel.
@@ -340,4 +398,5 @@ func (b *Backend) AbortAll(ctx context.Context) error {
 type GPUUpdate struct {
 	InstanceID int
 	GPUs       []GPUMetric // per-GPU utilization and temperature
+	IsDirect   bool        // true if SSH tunnel is direct (not proxied)
 }

@@ -50,17 +50,19 @@ type InstanceView struct {
 	GPUTemp       float64             // average temperature (used for API fallback display)
 	PerGPU        []backend.GPUMetric // per-GPU metrics from SSH nvidia-smi
 	HasSSHMetrics bool                // true once we've received GPU data via SSH; prevents API overwrite
+	SSHDirect     bool                // true if SSH tunnel is direct (not proxied)
 }
 
 // RenderInstance renders a multi-line view for a single instance.
 func RenderInstance(iv *InstanceView) string {
 	var lines []string
 
-	// Line 1: #<id> <gpu>x<n>  STATE  duration
+	// Line 1: #<id> <gpu>x<n>  STATE  ssh-icon  duration
 	duration := formatDuration(time.Since(iv.StateSince))
 	stateStr := renderState(iv.State)
-	lines = append(lines, fmt.Sprintf("  #%d %sx%d  %s  %s",
-		iv.ID, iv.GPUName, iv.NumGPUs, stateStr, stateDim.Render(duration)))
+	sshIcon := renderSSHIcon(iv.SSHDirect, iv.HasSSHMetrics)
+	lines = append(lines, fmt.Sprintf("  #%d %sx%d  %s %s %s",
+		iv.ID, iv.GPUName, iv.NumGPUs, stateStr, sshIcon, stateDim.Render(duration)))
 
 	// Line 2: dot + model name
 	dot := unhealthyDot
@@ -133,6 +135,18 @@ func renderGPUBar(utilPct float64, width int) string {
 
 func renderGPUStats(util, temp float64) string {
 	return fmt.Sprintf("%.0f%%  %.0f°C", util, temp)
+}
+
+// renderSSHIcon returns a colored icon indicating SSH connection type.
+// 🐇 (green) = direct SSH, 🐢 (red) = proxied SSH, dim "?" = unknown/not yet connected.
+func renderSSHIcon(isDirect bool, hasSSHMetrics bool) string {
+	if !hasSSHMetrics {
+		return stateDim.Render("?")
+	}
+	if isDirect {
+		return stateHealthy.Render("🐇")
+	}
+	return stateUnhealthy.Render("🐢")
 }
 
 func formatDuration(d time.Duration) string {

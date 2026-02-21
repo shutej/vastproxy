@@ -37,8 +37,8 @@ type SSHTunnel struct {
 var _ Tunnel = (*SSHTunnel)(nil)
 
 // NewSSHTunnel creates an SSH connection and establishes a local port forward.
-// It tries proxy SSH first (sshHost:sshPort) as it is more reliable, then
-// falls back to direct SSH (publicIP:directPort).
+// It tries direct SSH first (publicIP:directPort) for lower latency, then
+// falls back to proxy SSH (sshHost:sshPort) which is more reliable.
 func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort int, keyPath string, remotePort int) (Tunnel, error) {
 	conn := &sshlib.Connect{}
 	conn.HostKeyCallback = ssh.InsecureIgnoreHostKey()
@@ -48,24 +48,24 @@ func NewSSHTunnel(publicIP string, directSSHPort int, sshHost string, sshPort in
 		return nil, fmt.Errorf("build auth: %w", err)
 	}
 
-	// Try proxy SSH first (more reliable).
+	// Try direct SSH first (lower latency than the vast.ai proxy).
 	var connected bool
 	var isDirect bool
-	if sshHost != "" {
-		if err := conn.CreateClient(sshHost, fmt.Sprintf("%d", sshPort), "root", auth); err == nil {
+	if publicIP != "" && directSSHPort != 0 {
+		if err := conn.CreateClient(publicIP, fmt.Sprintf("%d", directSSHPort), "root", auth); err == nil {
 			connected = true
+			isDirect = true
 		} else {
-			log.Printf("ssh: proxy connect to %s:%d failed: %v", sshHost, sshPort, err)
+			log.Printf("ssh: direct connect to %s:%d failed: %v", publicIP, directSSHPort, err)
 		}
 	}
 
-	// Fallback to direct SSH.
-	if !connected && publicIP != "" && directSSHPort != 0 {
-		if err := conn.CreateClient(publicIP, fmt.Sprintf("%d", directSSHPort), "root", auth); err != nil {
-			return nil, fmt.Errorf("ssh direct connect to %s:%d: %w", publicIP, directSSHPort, err)
+	// Fallback to proxy SSH (more reliable but higher latency).
+	if !connected && sshHost != "" {
+		if err := conn.CreateClient(sshHost, fmt.Sprintf("%d", sshPort), "root", auth); err != nil {
+			return nil, fmt.Errorf("ssh proxy connect to %s:%d: %w", sshHost, sshPort, err)
 		}
 		connected = true
-		isDirect = true
 	}
 
 	if !connected {
