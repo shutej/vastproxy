@@ -93,8 +93,8 @@ func (w *Watcher) poll(ctx context.Context) {
 		seen[inst.ID] = true
 
 		existing, ok := w.instances[inst.ID]
-		if !ok {
-			// New instance — all HTTP traffic goes through SSH tunnel.
+		if !ok || existing.State == StateRemoving {
+			// New instance, or instance returning after removal (e.g. recycling).
 			inst.ContainerPort = inst.ResolveContainerPort()
 			inst.DirectSSHPort = inst.ResolveDirectSSHPort()
 			inst.State = StateDiscovered
@@ -113,12 +113,20 @@ func (w *Watcher) poll(ctx context.Context) {
 		}
 	}
 
-	// Detect removed instances.
+	// Detect removed instances and clean up stale entries.
 	for id, inst := range w.instances {
-		if !seen[id] && inst.State != StateRemoving {
+		if seen[id] {
+			continue
+		}
+		if inst.State != StateRemoving {
+			// Instance just disappeared — mark removing and notify.
 			inst.State = StateRemoving
 			inst.StateChangedAt = time.Now()
 			w.emit(InstanceEvent{Type: "removed", Instance: inst})
+		} else if time.Since(inst.StateChangedAt) > 5*time.Minute {
+			// Instance has been gone long enough — drop from map so it
+			// doesn't accumulate indefinitely after destroys.
+			delete(w.instances, id)
 		}
 	}
 }

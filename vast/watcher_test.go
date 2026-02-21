@@ -279,6 +279,218 @@ func TestHasInstanceRemoving(t *testing.T) {
 	}
 }
 
+func TestWatcherPollReAddsAfterRecycling(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var instances []Instance
+		switch callCount {
+		case 1:
+			// Poll 1: instance running.
+			instances = []Instance{
+				{ID: 1, ActualStatus: "running", PublicIPAddr: "1.2.3.4",
+					Ports: map[string][]PortMapping{"8000/tcp": {{HostPort: "12345"}}}},
+			}
+		case 2:
+			// Poll 2: instance recycling (not running).
+			instances = []Instance{
+				{ID: 1, ActualStatus: "recycling", PublicIPAddr: "1.2.3.4"},
+			}
+		default:
+			// Poll 3+: instance running again.
+			instances = []Instance{
+				{ID: 1, ActualStatus: "running", PublicIPAddr: "1.2.3.4",
+					Ports: map[string][]PortMapping{"8000/tcp": {{HostPort: "12345"}}}},
+			}
+		}
+		json.NewEncoder(w).Encode(InstancesResponse{Instances: instances})
+	}))
+	defer srv.Close()
+
+	c := newTestClient("key", srv.URL)
+	w := NewWatcher(c, time.Hour)
+	ch := w.Subscribe()
+
+	// Poll 1: instance added.
+	w.poll(context.Background())
+	evt := <-ch
+	if evt.Type != "added" || evt.Instance.ID != 1 {
+		t.Fatalf("poll 1: got %s/%d, want added/1", evt.Type, evt.Instance.ID)
+	}
+
+	// Poll 2: instance recycling → removed.
+	w.poll(context.Background())
+	evt = <-ch
+	if evt.Type != "removed" || evt.Instance.ID != 1 {
+		t.Fatalf("poll 2: got %s/%d, want removed/1", evt.Type, evt.Instance.ID)
+	}
+
+	// Poll 3: instance running again → must be re-added (not just "updated").
+	w.poll(context.Background())
+	evt = <-ch
+	if evt.Type != "added" || evt.Instance.ID != 1 {
+		t.Fatalf("poll 3: got %s/%d, want added/1 (re-add after recycling)", evt.Type, evt.Instance.ID)
+	}
+
+	// Instance should be tracked and not in removing state.
+	if !w.HasInstance(1) {
+		t.Error("HasInstance(1) = false after re-add")
+	}
+	inst := w.Instances()[1]
+	if inst.State != StateDiscovered {
+		t.Errorf("state = %v, want StateDiscovered", inst.State)
+	}
+}
+
+func TestWatcherPollReAddsAfterReboot(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var instances []Instance
+		switch callCount {
+		case 1:
+			instances = []Instance{
+				{ID: 1, ActualStatus: "running", PublicIPAddr: "1.2.3.4",
+					Ports: map[string][]PortMapping{"8000/tcp": {{HostPort: "12345"}}}},
+			}
+		case 2:
+			instances = []Instance{
+				{ID: 1, ActualStatus: "rebooting", PublicIPAddr: "1.2.3.4"},
+			}
+		default:
+			instances = []Instance{
+				{ID: 1, ActualStatus: "running", PublicIPAddr: "1.2.3.4",
+					Ports: map[string][]PortMapping{"8000/tcp": {{HostPort: "12345"}}}},
+			}
+		}
+		json.NewEncoder(w).Encode(InstancesResponse{Instances: instances})
+	}))
+	defer srv.Close()
+
+	c := newTestClient("key", srv.URL)
+	w := NewWatcher(c, time.Hour)
+	ch := w.Subscribe()
+
+	w.poll(context.Background())
+	evt := <-ch
+	if evt.Type != "added" {
+		t.Fatalf("poll 1: got %s, want added", evt.Type)
+	}
+
+	w.poll(context.Background())
+	evt = <-ch
+	if evt.Type != "removed" {
+		t.Fatalf("poll 2: got %s, want removed", evt.Type)
+	}
+
+	w.poll(context.Background())
+	evt = <-ch
+	if evt.Type != "added" {
+		t.Fatalf("poll 3: got %s, want added (re-add after reboot)", evt.Type)
+	}
+}
+
+func TestWatcherPollReAddsAfterDisappearance(t *testing.T) {
+	// Instance disappears entirely from the API (e.g. transient API issue),
+	// then reappears as running.
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var instances []Instance
+		switch callCount {
+		case 1:
+			instances = []Instance{
+				{ID: 1, ActualStatus: "running", PublicIPAddr: "1.2.3.4",
+					Ports: map[string][]PortMapping{"8000/tcp": {{HostPort: "12345"}}}},
+			}
+		case 2:
+			// Gone from API entirely.
+			instances = []Instance{}
+		default:
+			instances = []Instance{
+				{ID: 1, ActualStatus: "running", PublicIPAddr: "1.2.3.4",
+					Ports: map[string][]PortMapping{"8000/tcp": {{HostPort: "12345"}}}},
+			}
+		}
+		json.NewEncoder(w).Encode(InstancesResponse{Instances: instances})
+	}))
+	defer srv.Close()
+
+	c := newTestClient("key", srv.URL)
+	w := NewWatcher(c, time.Hour)
+	ch := w.Subscribe()
+
+	w.poll(context.Background())
+	evt := <-ch
+	if evt.Type != "added" {
+		t.Fatalf("poll 1: got %s, want added", evt.Type)
+	}
+
+	w.poll(context.Background())
+	evt = <-ch
+	if evt.Type != "removed" {
+		t.Fatalf("poll 2: got %s, want removed", evt.Type)
+	}
+
+	w.poll(context.Background())
+	evt = <-ch
+	if evt.Type != "added" {
+		t.Fatalf("poll 3: got %s, want added (re-add after disappearance)", evt.Type)
+	}
+}
+
+func TestWatcherCleansUpStaleRemovedInstances(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var instances []Instance
+		if callCount == 1 {
+			instances = []Instance{
+				{ID: 1, ActualStatus: "running", PublicIPAddr: "1.2.3.4",
+					Ports: map[string][]PortMapping{"8000/tcp": {{HostPort: "12345"}}}},
+			}
+		}
+		// All subsequent polls: instance gone (destroyed).
+		json.NewEncoder(w).Encode(InstancesResponse{Instances: instances})
+	}))
+	defer srv.Close()
+
+	c := newTestClient("key", srv.URL)
+	w := NewWatcher(c, time.Hour)
+	ch := w.Subscribe()
+
+	// Poll 1: added.
+	w.poll(context.Background())
+	<-ch
+
+	// Poll 2: removed.
+	w.poll(context.Background())
+	<-ch
+
+	// Instance still in map (StateRemoving, recent).
+	w.mu.RLock()
+	_, inMap := w.instances[1]
+	w.mu.RUnlock()
+	if !inMap {
+		t.Fatal("instance should still be in map right after removal")
+	}
+
+	// Backdate the StateChangedAt to simulate time passing.
+	w.mu.Lock()
+	w.instances[1].StateChangedAt = time.Now().Add(-10 * time.Minute)
+	w.mu.Unlock()
+
+	// Poll 3: stale entry should be cleaned up.
+	w.poll(context.Background())
+
+	w.mu.RLock()
+	_, inMap = w.instances[1]
+	w.mu.RUnlock()
+	if inMap {
+		t.Error("stale removed instance should have been cleaned up from map")
+	}
+}
+
 func TestWatcherConcurrentAccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(InstancesResponse{
