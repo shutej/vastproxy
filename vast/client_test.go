@@ -50,43 +50,6 @@ func TestListInstancesHTTPError(t *testing.T) {
 	}
 }
 
-func TestAttachSSHKey(t *testing.T) {
-	var gotBody map[string]string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			t.Errorf("method = %s, want POST", r.Method)
-		}
-		if r.URL.Path != "/instances/42/ssh/" {
-			t.Errorf("path = %s", r.URL.Path)
-		}
-		json.NewDecoder(r.Body).Decode(&gotBody)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	c := newTestClient("key", srv.URL)
-	err := c.AttachSSHKey(context.Background(), 42, "ssh-rsa AAAA...")
-	if err != nil {
-		t.Fatalf("AttachSSHKey() error: %v", err)
-	}
-	if gotBody["ssh_key"] != "ssh-rsa AAAA..." {
-		t.Errorf("ssh_key = %q", gotBody["ssh_key"])
-	}
-}
-
-func TestAttachSSHKeyError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer srv.Close()
-
-	c := newTestClient("key", srv.URL)
-	err := c.AttachSSHKey(context.Background(), 1, "ssh-rsa AAAA...")
-	if err == nil {
-		t.Fatal("expected error for 403 response")
-	}
-}
-
 func TestListInstancesDecodeError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -108,17 +71,6 @@ func TestListInstancesNetworkError(t *testing.T) {
 
 	c := newTestClient("key", srv.URL)
 	_, err := c.ListInstances(context.Background())
-	if err == nil {
-		t.Fatal("expected error for closed server")
-	}
-}
-
-func TestAttachSSHKeyNetworkError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	srv.Close()
-
-	c := newTestClient("key", srv.URL)
-	err := c.AttachSSHKey(context.Background(), 1, "ssh-rsa AAAA...")
 	if err == nil {
 		t.Fatal("expected error for closed server")
 	}

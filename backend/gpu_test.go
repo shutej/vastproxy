@@ -121,28 +121,3 @@ func TestParseNvidiaSmiMultiGPUWithBlankLines(t *testing.T) {
 		t.Fatalf("GPUs len = %d, want 2", len(m.GPUs))
 	}
 }
-
-func TestGPUMetricsAvg(t *testing.T) {
-	m := &GPUMetrics{
-		GPUs: []GPUMetric{
-			{Utilization: 80, Temperature: 70},
-			{Utilization: 60, Temperature: 50},
-		},
-	}
-	if avg := m.AvgUtilization(); avg != 70 {
-		t.Errorf("AvgUtilization = %f, want 70", avg)
-	}
-	if avg := m.AvgTemperature(); avg != 60 {
-		t.Errorf("AvgTemperature = %f, want 60", avg)
-	}
-}
-
-func TestGPUMetricsAvgEmpty(t *testing.T) {
-	m := &GPUMetrics{}
-	if avg := m.AvgUtilization(); avg != 0 {
-		t.Errorf("AvgUtilization = %f, want 0", avg)
-	}
-	if avg := m.AvgTemperature(); avg != 0 {
-		t.Errorf("AvgTemperature = %f, want 0", avg)
-	}
-}

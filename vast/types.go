@@ -96,26 +96,6 @@ func (inst *Instance) ResolveContainerPort() int {
 	return 8000
 }
 
-// ResolveHostPort resolves the host port that maps to the SGLang container port.
-func (inst *Instance) ResolveHostPort() int {
-	containerPort := inst.ResolveContainerPort()
-	// Try exact container port mapping
-	if p := inst.resolvePort(fmt.Sprintf("%d/tcp", containerPort)); p != 0 {
-		return p
-	}
-	// Try common SGLang ports
-	for _, key := range []string{"8000/tcp", "18000/tcp", "30000/tcp"} {
-		if p := inst.resolvePort(key); p != 0 {
-			return p
-		}
-	}
-	// Fallback: direct port range
-	if inst.DirectPortStart != nil {
-		return *inst.DirectPortStart
-	}
-	return 0
-}
-
 // ResolveDirectSSHPort resolves the direct SSH host port (22/tcp mapping).
 func (inst *Instance) ResolveDirectSSHPort() int {
 	return inst.resolvePort("22/tcp")

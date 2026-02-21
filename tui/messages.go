@@ -26,11 +26,6 @@ type GPUMetricsMsg struct {
 	backend.GPUUpdate
 }
 
-// ErrorMsg is sent when a fatal error occurs.
-type ErrorMsg struct {
-	Error error
-}
-
 // TickMsg is sent periodically to refresh durations in the view.
 type TickMsg time.Time
 

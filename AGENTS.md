@@ -58,7 +58,6 @@ All packages should stay above 80%.
 - `backend/` — Backend struct (health checks, SSH tunnels, GPU metrics)
 - `proxy/` — Round-robin balancer + `httputil.ReverseProxy` handler
 - `tui/` — Bubbletea terminal UI
-- `api/` — ogen-generated OpenAPI types (not used for HTTP handling)
 
 ## Key Design Decisions
 

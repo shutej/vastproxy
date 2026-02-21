@@ -85,30 +85,6 @@ func (c *Client) SetLabel(ctx context.Context, instanceID int, label string) err
 	return nil
 }
 
-// AttachSSHKey attaches a public SSH key to an instance.
-func (c *Client) AttachSSHKey(ctx context.Context, instanceID int, publicKey string) error {
-	body, _ := json.Marshal(map[string]string{"ssh_key": publicKey})
-	url := fmt.Sprintf("%s/instances/%d/ssh/", c.baseURL, instanceID)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("attach ssh key returned HTTP %d: %s", resp.StatusCode, body)
-	}
-	return nil
-}
-
 // DestroyInstance destroys a vast.ai instance permanently.
 // This is irreversible — all data on the instance is lost.
 func (c *Client) DestroyInstance(ctx context.Context, instanceID int) error {

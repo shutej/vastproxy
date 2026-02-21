@@ -17,30 +17,6 @@ type GPUMetrics struct {
 	GPUs []GPUMetric
 }
 
-// AvgUtilization returns the mean utilization across all GPUs.
-func (m *GPUMetrics) AvgUtilization() float64 {
-	if len(m.GPUs) == 0 {
-		return 0
-	}
-	var sum float64
-	for _, g := range m.GPUs {
-		sum += g.Utilization
-	}
-	return sum / float64(len(m.GPUs))
-}
-
-// AvgTemperature returns the mean temperature across all GPUs.
-func (m *GPUMetrics) AvgTemperature() float64 {
-	if len(m.GPUs) == 0 {
-		return 0
-	}
-	var sum float64
-	for _, g := range m.GPUs {
-		sum += g.Temperature
-	}
-	return sum / float64(len(m.GPUs))
-}
-
 // ParseNvidiaSmi parses the output of:
 //
 //	nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits

@@ -49,57 +49,6 @@ func TestResolveContainerPort(t *testing.T) {
 	}
 }
 
-func TestResolveHostPort(t *testing.T) {
-	tests := []struct {
-		name string
-		inst Instance
-		want int
-	}{
-		{
-			name: "exact container port mapping",
-			inst: Instance{
-				Ports: map[string][]PortMapping{"8000/tcp": {{HostPort: "12345"}}},
-			},
-			want: 12345,
-		},
-		{
-			name: "custom container port mapping",
-			inst: Instance{
-				ExtraEnv: json.RawMessage(`{"SGLANG_ARGS":"--port 30000"}`),
-				Ports:    map[string][]PortMapping{"30000/tcp": {{HostPort: "54321"}}},
-			},
-			want: 54321,
-		},
-		{
-			name: "fallback to common ports",
-			inst: Instance{
-				Ports: map[string][]PortMapping{"18000/tcp": {{HostPort: "18001"}}},
-			},
-			want: 18001,
-		},
-		{
-			name: "fallback to direct port start",
-			inst: Instance{
-				DirectPortStart: intPtr(40000),
-			},
-			want: 40000,
-		},
-		{
-			name: "no ports returns 0",
-			inst: Instance{},
-			want: 0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.inst.ResolveHostPort(); got != tt.want {
-				t.Errorf("ResolveHostPort() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestResolveDirectSSHPort(t *testing.T) {
 	inst := Instance{
 		Ports: map[string][]PortMapping{"22/tcp": {{HostPort: "22222"}}},
@@ -194,29 +143,6 @@ func TestInstanceStateString(t *testing.T) {
 	}
 }
 
-func TestResolvePortNonNumeric(t *testing.T) {
-	// HostPort that isn't a valid number should return 0.
-	inst := Instance{
-		Ports: map[string][]PortMapping{"8000/tcp": {{HostPort: "not-a-number"}}},
-	}
-	if got := inst.ResolveHostPort(); got != 0 {
-		// Falls through all resolutions; the 8000/tcp mapping has invalid port.
-		// Should try 8000/tcp (non-numeric → 0), then 18000/tcp (missing → 0),
-		// then 30000/tcp (missing → 0), then no DirectPortStart → 0.
-		t.Errorf("ResolveHostPort() = %d, want 0", got)
-	}
-}
-
-func TestResolvePortEmptyMappings(t *testing.T) {
-	// Key exists but mappings slice is empty.
-	inst := Instance{
-		Ports: map[string][]PortMapping{"8000/tcp": {}},
-	}
-	if got := inst.ResolveHostPort(); got != 0 {
-		t.Errorf("ResolveHostPort() = %d, want 0 for empty mappings", got)
-	}
-}
-
 func TestParseExtraEnvShortPair(t *testing.T) {
 	// List format with pairs that have fewer than 2 elements should be skipped.
 	inst := &Instance{ExtraEnv: json.RawMessage(`[["ONLY_KEY"],["K","V"]]`)}
@@ -237,5 +163,3 @@ func TestParseExtraEnvEmptyKey(t *testing.T) {
 		t.Fatalf("got %v, want 1 entry", got)
 	}
 }
-
-func intPtr(v int) *int { return &v }

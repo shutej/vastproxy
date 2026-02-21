@@ -206,10 +206,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.destroyStatus = ""
 		return m, nil
 
-	case ErrorMsg:
-		m.err = msg.Error
-		return m, nil
-
 	case TickMsg:
 		// Purge instances that have been in REMOVING state for 30s+.
 		now := time.Now()
