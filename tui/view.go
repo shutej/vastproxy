@@ -138,7 +138,7 @@ func renderGPUBar(utilPct float64, width int) string {
 }
 
 func renderGPUStats(util, temp float64) string {
-	return fmt.Sprintf("%.0f%%  %.0f°C", util, temp)
+	return fmt.Sprintf("%3.0f%%  %3.0f°C", util, temp)
 }
 
 // renderSSHIcon returns a colored icon indicating SSH connection type.
