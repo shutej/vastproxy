@@ -52,8 +52,11 @@ func main() {
 	// Create load balancer.
 	balancer := proxy.NewBalancer()
 
+	// Create sticky stats tracker (5-minute sliding window).
+	stickyStats := proxy.NewStickyStats(5 * time.Minute)
+
 	// Create reverse proxy handler.
-	httpHandler := proxy.NewReverseProxy(balancer)
+	httpHandler := proxy.NewReverseProxy(balancer, stickyStats)
 
 	// Create HTTP server.
 	httpServer := &http.Server{
@@ -96,7 +99,7 @@ func main() {
 	abortFn := func() {
 		balancer.AbortAll(context.Background())
 	}
-	tuiModel := tui.NewModel(tuiEventCh, gpuCh, listenAddr, startWatcher, abortFn)
+	tuiModel := tui.NewModel(tuiEventCh, gpuCh, listenAddr, startWatcher, abortFn, stickyStats)
 	p := tea.NewProgram(tuiModel, tea.WithAltScreen())
 
 	go func() {

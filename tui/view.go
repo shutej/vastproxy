@@ -31,11 +31,15 @@ var (
 )
 
 // RenderHeader renders the proxy status header line.
-func RenderHeader(listenAddr string, totalBackends, healthyBackends int) string {
-	return headerStyle.Render(fmt.Sprintf(
-		"Listening on %s | %d backends (%d healthy)",
-		listenAddr, totalBackends, healthyBackends,
-	))
+// stickyPct is the percentage of requests with the sticky header over the last
+// 5 minutes; a negative value means no requests have been recorded yet.
+func RenderHeader(listenAddr string, totalBackends, healthyBackends int, stickyPct float64) string {
+	base := fmt.Sprintf("Listening on %s | %d backends (%d healthy)",
+		listenAddr, totalBackends, healthyBackends)
+	if stickyPct >= 0 {
+		base += fmt.Sprintf(" | %.0f%% sticky", stickyPct)
+	}
+	return headerStyle.Render(base)
 }
 
 // InstanceView holds the display state for a single instance.

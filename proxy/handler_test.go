@@ -50,7 +50,7 @@ func TestReverseProxyRouting(t *testing.T) {
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
 
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	tests := []struct {
 		name     string
@@ -93,7 +93,7 @@ func TestReverseProxyBearerAuth(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	// Client sends its own auth — should be replaced with backend token.
 	req := httptest.NewRequest("GET", "/v1/models", nil)
@@ -112,7 +112,7 @@ func TestReverseProxyBearerAuth(t *testing.T) {
 
 func TestReverseProxyNoBackends(t *testing.T) {
 	bal := NewBalancer()
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -137,7 +137,7 @@ func TestReverseProxySSEStreaming(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"stream":true}`))
 	rec := httptest.NewRecorder()
@@ -164,7 +164,7 @@ func TestReverseProxyAcquireRelease(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -204,7 +204,7 @@ func TestReverseProxyRoundRobinDistribution(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends(backends)
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	// Send 30 requests and track which backend handled each.
 	const totalReqs = 30
@@ -262,7 +262,7 @@ func TestReverseProxyRoundRobinSkipsUnhealthy(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends(backends)
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	hitCounts := map[string]int{}
 	for range 10 {
@@ -310,7 +310,7 @@ func TestReverseProxyConcurrentRoundRobin(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends(backends)
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	const numWorkers = 10
 	const reqsPerWorker = 9
@@ -366,7 +366,7 @@ func TestReverseProxyStickyHeaderInResponse(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -403,7 +403,7 @@ func TestReverseProxyStickyRouting(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends(backends)
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	// Send 10 requests all pinned to instance 2.
 	for range 10 {
@@ -434,7 +434,7 @@ func TestReverseProxyStickyFallback(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	// Request a nonexistent instance — should fall back to round-robin.
 	req := httptest.NewRequest("GET", "/v1/models", nil)
@@ -468,7 +468,7 @@ func TestReverseProxyStickyHeaderNotForwarded(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	req.Header.Set(StickyHeader, "5")
@@ -489,7 +489,7 @@ func TestReverseProxyBadBackendURL(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -519,7 +519,7 @@ func TestReverseProxyBackendError(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -546,7 +546,7 @@ func TestReverseProxyForwardsRequestBody(t *testing.T) {
 
 	bal := NewBalancer()
 	bal.SetBackends([]*backend.Backend{be})
-	handler := NewReverseProxy(bal)
+	handler := NewReverseProxy(bal, nil)
 
 	body := `{"model":"test","messages":[{"role":"user","content":"hello"}]}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))

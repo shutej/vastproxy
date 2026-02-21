@@ -12,6 +12,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// StickyPercenter returns the sticky-request percentage for display.
+type StickyPercenter interface {
+	Percent() float64
+}
+
 // Model is the bubbletea model for the proxy TUI.
 type Model struct {
 	instances    map[int]*InstanceView
@@ -22,6 +27,7 @@ type Model struct {
 	gpuCh        <-chan backend.GPUUpdate
 	startWatcher func() // called once from Init to start the watcher
 	abortFn      func() // called to abort all backend inference
+	stickyStats  StickyPercenter
 	started      bool
 	width        int    // terminal width
 	height       int    // terminal height
@@ -31,7 +37,7 @@ type Model struct {
 }
 
 // NewModel creates the TUI model.
-func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate, listenAddr string, startWatcher func(), abortFn func()) Model {
+func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate, listenAddr string, startWatcher func(), abortFn func(), stickyStats StickyPercenter) Model {
 	return Model{
 		instances:    make(map[int]*InstanceView),
 		eventCh:      eventCh,
@@ -39,6 +45,7 @@ func NewModel(eventCh <-chan vast.InstanceEvent, gpuCh <-chan backend.GPUUpdate,
 		listenAddr:   listenAddr,
 		startWatcher: startWatcher,
 		abortFn:      abortFn,
+		stickyStats:  stickyStats,
 	}
 }
 
@@ -221,7 +228,11 @@ func (m Model) View() string {
 		}
 	}
 
-	body.WriteString(RenderHeader(m.listenAddr, total, healthy))
+	stickyPct := float64(-1)
+	if m.stickyStats != nil {
+		stickyPct = m.stickyStats.Percent()
+	}
+	body.WriteString(RenderHeader(m.listenAddr, total, healthy, stickyPct))
 	body.WriteString("\n\n")
 
 	// Collect rendered cards.

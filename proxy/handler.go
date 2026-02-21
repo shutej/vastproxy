@@ -48,13 +48,17 @@ func (sr *statusRecorder) Flush() {
 //
 // Incoming path is forwarded as-is to the backend. For example,
 // a request to /v1/chat/completions is proxied to <backend>/v1/chat/completions.
-func NewReverseProxy(balancer *Balancer) http.Handler {
+func NewReverseProxy(balancer *Balancer, stickyStats *StickyStats) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
 		// Sticky routing: if the client sends X-VastProxy-Instance, try
 		// to route to that specific backend for KV cache locality.
 		var be *backend.Backend
+		hasSticky := r.Header.Get(StickyHeader) != ""
+		if stickyStats != nil {
+			stickyStats.Record(hasSticky)
+		}
 		if raw := r.Header.Get(StickyHeader); raw != "" {
 			if id, err := strconv.Atoi(raw); err == nil {
 				be, _ = balancer.PickByID(id)
