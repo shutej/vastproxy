@@ -528,6 +528,67 @@ func TestReverseProxyBackendError(t *testing.T) {
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("status = %d, want 502", rec.Code)
 	}
+
+	// Backend should be marked unhealthy immediately after the error.
+	if be.IsHealthy() {
+		t.Error("backend should be unhealthy after proxy error")
+	}
+}
+
+func TestReverseProxyBackendErrorSkipsOnNextRequest(t *testing.T) {
+	// One backend that always fails (closes connection), one that works.
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			return
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer badSrv.Close()
+
+	goodSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Backend-ID", "2")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer goodSrv.Close()
+
+	badBe := backend.NewBackend(&vast.Instance{ID: 1}, "", nil, "")
+	badBe.SetBaseURL(badSrv.URL)
+	badBe.SetHealthy(true)
+
+	goodBe := backend.NewBackend(&vast.Instance{ID: 2}, "", nil, "")
+	goodBe.SetBaseURL(goodSrv.URL)
+	goodBe.SetHealthy(true)
+
+	bal := NewBalancer()
+	bal.SetBackends([]*backend.Backend{badBe, goodBe})
+	handler := NewReverseProxy(bal, nil)
+
+	// First request hits the bad backend — should get 502 and mark it unhealthy.
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("first request: status = %d, want 502", rec.Code)
+	}
+	if badBe.IsHealthy() {
+		t.Fatal("bad backend should be unhealthy after error")
+	}
+
+	// All subsequent requests should go to the good backend only.
+	for i := range 5 {
+		req = httptest.NewRequest("GET", "/v1/models", nil)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("request %d: status = %d, want 200", i, rec.Code)
+		}
+		if got := rec.Header().Get("X-Backend-ID"); got != "2" {
+			t.Errorf("request %d: routed to backend %s, want 2", i, got)
+		}
+	}
 }
 
 func TestReverseProxyForwardsRequestBody(t *testing.T) {

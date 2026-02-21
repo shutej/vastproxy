@@ -125,7 +125,8 @@ func NewReverseProxy(balancer *Balancer, stickyStats *StickyStats) http.Handler 
 			},
 			Transport: be.HTTPClient().Transport,
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-				log.Printf("proxy: backend %d error: %v", be.Instance.ID, err)
+				log.Printf("proxy: backend %d error, marking unhealthy: %v", be.Instance.ID, err)
+				be.SetHealthy(false)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadGateway)
 				w.Write([]byte(`{"error":{"message":"backend error","type":"server_error"}}`))
